@@ -1,4 +1,4 @@
-name = "moisdes-worker"
+name = "moisdes-worker1"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
 
