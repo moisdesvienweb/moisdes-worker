@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="yi" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>מאסדעס וויען</title>
+<link rel="icon" href="/logo.avif">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://moisdes-worker.moisdesvienweb.workers.dev">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/shared-styles.css">
+<style>
+  .form-wrap { max-width: 640px; margin: 0 auto; }
+  .form-field { margin-bottom: 1.4rem; }
+  .form-field label { display: block; font-weight: 700; margin-bottom: .4rem; font-size: .95rem; }
+  .form-field .req { color: #ff8a80; }
+  .form-field input[type=text], .form-field input[type=email], .form-field input[type=tel],
+  .form-field input[type=date], .form-field input[type=file], .form-field textarea, .form-field select {
+    width: 100%; padding: .6rem .75rem; border-radius: 3px; border: 1px solid rgba(255,255,255,.2);
+    background: rgba(255,255,255,.06); color: #fff; font-family: inherit; font-size: .95rem;
+  }
+  .form-field textarea { min-height: 100px; resize: vertical; }
+  .form-field .choice-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .35rem; }
+  .form-field .choice-row input { width: auto; }
+  .form-heading { font-size: 1.3rem; font-weight: 900; margin: 2rem 0 .5rem; }
+  .form-heading:first-child { margin-top: 0; }
+  .form-paragraph { color: var(--ink-soft); margin-bottom: 1.4rem; }
+  .form-submit {
+    background: #d9a55c; color: #2c1608; border: none; border-radius: 3px; padding: .75rem 1.6rem;
+    font-weight: 700; font-size: .95rem; cursor: pointer; font-family: inherit;
+  }
+  .form-submit:disabled { opacity: .6; cursor: default; }
+  .form-error { color: #ff8a80; font-size: .85rem; margin-top: 1rem; }
+</style>
+</head>
+<body>
+
+<header id="moisdes-header">
+  <div class="header-inner">
+    <a href="/" class="header-logo"><img src="/logo.avif" alt="מאסדעס וויען"></a>
+    <ul class="header-nav">
+      <li><a href="/blog">בלאג</a></li>
+      <li><a href="/posters">מודעות</a></li>
+      <li><a href="/events">מעמדים</a></li>
+      <li><a href="/video">ווידיאוס</a></li>
+      <li><a href="/pdfs">גליונות</a></li>
+    </ul>
+    <form class="header-search" action="/search/" method="get">
+      <input type="search" name="q" placeholder="זוכן...">
+      <button type="submit" aria-label="זוכן">&#128269;</button>
+    </form>
+    <button class="header-burger" id="burger-btn" aria-label="תפריט">&#9776;</button>
+  </div>
+</header>
+<div id="moisdes-mobile">
+  <button class="mobile-close" id="mobile-close-btn">&#10005;</button>
+  <img src="/logo.avif" alt="מאסדעס וויען">
+  <a href="/blog">בלאג</a>
+  <a href="/posters">מודעות</a>
+  <a href="/events">מעמדים</a>
+  <a href="/video">ווידיאוס</a>
+  <a href="/pdfs">גליונות</a>
+  <form class="header-search" action="/search/" method="get">
+    <input type="search" name="q" placeholder="זוכן...">
+    <button type="submit" aria-label="זוכן">&#128269;</button>
+  </form>
+</div>
+
+<main class="page">
+  <div id="app"><p class="state-msg">לאדט...</p></div>
+</main>
+
+<footer id="moisdes-footer">
+  <div class="footer-inner">
+    <a href="/" class="footer-logo"><img src="/logo.avif" alt="מאסדעס וויען"></a>
+    <ul class="footer-nav">
+      <li><a href="/blog">בלאג</a></li>
+      <li><a href="/posters">מודעות</a></li>
+      <li><a href="/events">מעמדים</a></li>
+      <li><a href="/video">ווידיאוס</a></li>
+      <li><a href="/pdfs">גליונות</a></li>
+    </ul>
+    <div class="footer-copy">&copy; 2026 Mosdes Vien</div>
+  </div>
+</footer>
+
+<script src="/shared-config.js"></script>
+<script src="/moisdes-api.js"></script>
+<script src="/chrome.js"></script>
+<script>
+(async function () {
+  const api = window.MOISDES.api;
+  const util = window.MOISDES.util;
+  const app = document.getElementById('app');
+
+  const m = location.pathname.match(/^\/form\/([^/]+)\/?$/);
+  if (!m) {
+    app.innerHTML = `
+      <h1 class="page-title">דאס בלאט איז נישט געפונען געווארן</h1>
+      <p><a href="/">צוריק צום הויפט בלאט</a></p>`;
+    return;
+  }
+
+  const slug = m[1];
+
+  let data;
+  try {
+    data = await api.get(`/api/forms/${encodeURIComponent(slug)}/public`);
+  } catch (e) {
+    app.innerHTML = `
+      <h1 class="page-title">דער פארמולאר איז נישט געפונען געווארן</h1>
+      <p><a href="/">צוריק צום הויפט בלאט</a></p>`;
+    return;
+  }
+
+  const { form, fields } = data;
+  const settings = form.settings || {};
+
+  if (settings.status === 'closed') {
+    app.innerHTML = `
+      <h1 class="page-title">${util.eh(form.title)}</h1>
+      <p class="state-msg">דער פארמולאר איז געשלאסן</p>`;
+    return;
+  }
+
+  const wrap = document.createElement('div');
+  wrap.className = 'form-wrap';
+  const titleEl = document.createElement('h1');
+  titleEl.className = 'page-title';
+  titleEl.textContent = form.title || '';
+  wrap.appendChild(titleEl);
+
+  if (settings.description) {
+    const desc = document.createElement('p');
+    desc.className = 'form-paragraph';
+    desc.textContent = settings.description;
+    wrap.appendChild(desc);
+  }
+
+  const formEl = document.createElement('form');
+  formEl.id = 'public-form';
+
+  function fieldInput(f) {
+    const wrapEl = document.createElement('div');
+    wrapEl.className = 'form-field';
+
+    if (f.type === 'heading') {
+      wrapEl.innerHTML = `<div class="form-heading">${util.eh(f.label)}</div>`;
+      return wrapEl;
+    }
+    if (f.type === 'paragraph') {
+      wrapEl.innerHTML = `<div class="form-paragraph">${util.eh(f.label)}</div>`;
+      return wrapEl;
+    }
+
+    const label = document.createElement('label');
+    label.innerHTML = util.eh(f.label) + (f.required ? ' <span class="req">*</span>' : '');
+    label.setAttribute('for', 'field-' + f.id);
+    wrapEl.appendChild(label);
+
+    const name = 'field-' + f.id;
+    let input;
+
+    switch (f.type) {
+      case 'textarea':
+        input = document.createElement('textarea');
+        break;
+      case 'select':
+        input = document.createElement('select');
+        input.innerHTML = '<option value="">-</option>' +
+          (f.options || []).map((o) => `<option value="${util.eh(o)}">${util.eh(o)}</option>`).join('');
+        break;
+      case 'radio':
+      case 'checkbox': {
+        const group = document.createElement('div');
+        (f.options || []).forEach((o, i) => {
+          const row = document.createElement('div');
+          row.className = 'choice-row';
+          const inp = document.createElement('input');
+          inp.type = f.type;
+          inp.name = f.type === 'radio' ? name : `${name}[]`;
+          inp.value = o;
+          inp.id = `${name}-${i}`;
+          const lbl = document.createElement('label');
+          lbl.setAttribute('for', inp.id);
+          lbl.textContent = o;
+          lbl.style.fontWeight = '400';
+          row.appendChild(inp);
+          row.appendChild(lbl);
+          group.appendChild(row);
+        });
+        wrapEl.appendChild(group);
+        return wrapEl;
+      }
+      case 'file':
+        input = document.createElement('input');
+        input.type = 'file';
+        break;
+      case 'email':
+        input = document.createElement('input');
+        input.type = 'email';
+        break;
+      case 'phone':
+        input = document.createElement('input');
+        input.type = 'tel';
+        break;
+      case 'date':
+        input = document.createElement('input');
+        input.type = 'date';
+        break;
+      default:
+        input = document.createElement('input');
+        input.type = 'text';
+    }
+    input.id = name;
+    input.name = name;
+    if (f.placeholder) input.placeholder = f.placeholder;
+    if (f.required) input.required = true;
+    wrapEl.appendChild(input);
+    return wrapEl;
+  }
+
+  fields.forEach((f) => formEl.appendChild(fieldInput(f)));
+
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'submit';
+  submitBtn.className = 'form-submit';
+  submitBtn.textContent = 'שיקן';
+  formEl.appendChild(submitBtn);
+
+  const errorEl = document.createElement('div');
+  errorEl.className = 'form-error';
+  formEl.appendChild(errorEl);
+
+  wrap.appendChild(formEl);
+  app.innerHTML = '';
+  app.appendChild(wrap);
+
+  formEl.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    submitBtn.disabled = true;
+    errorEl.textContent = '';
+
+    try {
+      const answers = {};
+      for (const f of fields) {
+        if (f.type === 'heading' || f.type === 'paragraph') continue;
+        const name = 'field-' + f.id;
+        if (f.type === 'checkbox') {
+          answers[f.id] = [...formEl.querySelectorAll(`[name="${name}[]"]:checked`)].map((el) => el.value).join(', ');
+        } else if (f.type === 'radio') {
+          const checked = formEl.querySelector(`[name="${name}"]:checked`);
+          answers[f.id] = checked ? checked.value : '';
+        } else if (f.type === 'file') {
+          const fileInput = formEl.querySelector(`#${name}`);
+          const file = fileInput.files[0];
+          if (file) {
+            const { url, key } = await api.post(`/api/forms/${encodeURIComponent(slug)}/presign`, { filename: file.name });
+            await fetch(url, { method: 'PUT', body: file });
+            answers[f.id] = key;
+          } else {
+            answers[f.id] = '';
+          }
+        } else {
+          const el = formEl.querySelector(`#${name}`);
+          answers[f.id] = el ? el.value : '';
+        }
+      }
+
+      await api.post(`/api/forms/${encodeURIComponent(slug)}/submit`, { answers });
+
+      app.innerHTML = `
+        <div class="form-wrap">
+          <h1 class="page-title">${util.eh(settings.thankYouTitle || 'א דאנק!')}</h1>
+          <p>${util.eh(settings.thankYouMessage || 'אייער ענטפער איז אנגענומען געווארן.')}</p>
+        </div>`;
+    } catch (err) {
+      errorEl.textContent = err.message || 'עפעס איז נישט אין ארדנונג. פרובירט נאכאמאל.';
+      submitBtn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>

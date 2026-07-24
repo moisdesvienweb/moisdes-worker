@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Moisdes Vien — Admin</title>
+<link rel="icon" href="/logo.avif">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://moisdes-worker.moisdesvienweb.workers.dev">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/admin-styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  if (window.pdfjsLib) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+</script>
+</head>
+<body>
+<div id="admin-root">
+  <aside class="sidebar">
+    <div class="sidebar-logo"><img src="/logo.avif" alt="Moisdes Vien"></div>
+    <nav class="sidebar-nav">
+      <button class="sidebar-link active" data-panel="upload">Upload</button>
+      <button class="sidebar-link" data-panel="browse">Browse &amp; Edit</button>
+      <button class="sidebar-link" data-panel="forms">Forms</button>
+      <button class="sidebar-link" data-panel="users">Users</button>
+      <button class="sidebar-link sidebar-logout" id="logout-btn">Logout</button>
+    </nav>
+  </aside>
+
+  <main class="admin-main">
+
+    <!-- ===================== UPLOAD ===================== -->
+    <section class="panel active" id="panel-upload">
+      <h1>Upload</h1>
+      <div class="subtabs" id="upload-subtabs">
+        <button class="subtab active" data-type="posts">Blog</button>
+        <button class="subtab" data-type="posters">Posters</button>
+        <button class="subtab" data-type="events">Events</button>
+        <button class="subtab" data-type="videos">Videos</button>
+        <button class="subtab" data-type="pdfs">PDFs</button>
+      </div>
+      <div id="upload-form-container"></div>
+    </section>
+
+    <!-- ===================== BROWSE & EDIT ===================== -->
+    <section class="panel" id="panel-browse">
+      <h1>Browse &amp; Edit</h1>
+      <div class="subtabs" id="browse-subtabs">
+        <button class="subtab active" data-type="posts">Blog</button>
+        <button class="subtab" data-type="posters">Posters</button>
+        <button class="subtab" data-type="events">Events</button>
+        <button class="subtab" data-type="videos">Videos</button>
+        <button class="subtab" data-type="pdfs">PDFs</button>
+      </div>
+      <input type="text" class="filter-input" id="browse-filter" placeholder="Filter...">
+      <div class="table-wrap"><table id="browse-table"><thead></thead><tbody></tbody></table></div>
+    </section>
+
+    <!-- ===================== FORMS ===================== -->
+    <section class="panel" id="panel-forms">
+      <h1>Forms</h1>
+      <div class="forms-layout">
+        <div class="forms-list-col">
+          <button class="btn btn-primary" id="new-form-btn">+ New form</button>
+          <ul class="forms-list" id="forms-list"></ul>
+        </div>
+        <div class="forms-detail-col" id="forms-detail">
+          <p class="empty-msg">Select or create a form.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== USERS ===================== -->
+    <section class="panel" id="panel-users">
+      <h1>Users</h1>
+      <form id="new-user-form" class="inline-form">
+        <input type="text" id="nu-name" placeholder="Name" required>
+        <input type="email" id="nu-email" placeholder="Email" required>
+        <input type="password" id="nu-password" placeholder="Password" required>
+        <select id="nu-role">
+          <option value="editor">Editor</option>
+          <option value="admin">Admin</option>
+        </select>
+        <button type="submit" class="btn btn-primary">Add user</button>
+      </form>
+      <div class="state-msg" id="users-msg"></div>
+      <div class="table-wrap"><table id="users-table"><thead>
+        <tr><th>Name</th><th>Email</th><th>Role</th><th>Active</th><th>Created</th></tr>
+      </thead><tbody></tbody></table></div>
+    </section>
+
+  </main>
+</div>
+
+<div class="modal-overlay" id="edit-modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="edit-modal-title">Edit</h2>
+      <button class="modal-close" id="edit-modal-close">&times;</button>
+    </div>
+    <div class="modal-body" id="edit-modal-body"></div>
+  </div>
+</div>
+
+<script src="/shared-config.js"></script>
+<script src="/hebrew-dates.js"></script>
+<script src="/moisdes-api.js"></script>
+<script src="/admin-fields.js"></script>
+<script src="/admin-upload.js"></script>
+<script src="/admin-browse.js"></script>
+<script src="/admin-forms.js"></script>
+<script src="/admin-users.js"></script>
+<script src="/admin.js"></script>
+</body>
+</html>

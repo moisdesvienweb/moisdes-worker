@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="yi" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>מודעות — מאסדעס וויען</title>
+<link rel="icon" href="/logo.avif">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://moisdes-worker.moisdesvienweb.workers.dev">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/shared-styles.css">
+</head>
+<body>
+
+<header id="moisdes-header">
+  <div class="header-inner">
+    <a href="/" class="header-logo"><img src="/logo.avif" alt="מאסדעס וויען"></a>
+    <ul class="header-nav">
+      <li><a href="/blog">בלאג</a></li>
+      <li><a href="/posters" class="active">מודעות</a></li>
+      <li><a href="/events">מעמדים</a></li>
+      <li><a href="/video">ווידיאוס</a></li>
+      <li><a href="/pdfs">גליונות</a></li>
+    </ul>
+    <form class="header-search" action="/search/" method="get">
+      <input type="search" name="q" placeholder="זוכן...">
+      <button type="submit" aria-label="זוכן">&#128269;</button>
+    </form>
+    <button class="header-burger" id="burger-btn" aria-label="תפריט">&#9776;</button>
+  </div>
+</header>
+<div id="moisdes-mobile">
+  <button class="mobile-close" id="mobile-close-btn">&#10005;</button>
+  <img src="/logo.avif" alt="מאסדעס וויען">
+  <a href="/blog">בלאג</a>
+  <a href="/posters" class="active">מודעות</a>
+  <a href="/events">מעמדים</a>
+  <a href="/video">ווידיאוס</a>
+  <a href="/pdfs">גליונות</a>
+  <form class="header-search" action="/search/" method="get">
+    <input type="search" name="q" placeholder="זוכן...">
+    <button type="submit" aria-label="זוכן">&#128269;</button>
+  </form>
+</div>
+
+<main class="page">
+  <h1 class="page-title">מודעות</h1>
+  <div id="posters-list"><p class="state-msg">לאדט...</p></div>
+</main>
+
+<footer id="moisdes-footer">
+  <div class="footer-inner">
+    <a href="/" class="footer-logo"><img src="/logo.avif" alt="מאסדעס וויען"></a>
+    <ul class="footer-nav">
+      <li><a href="/blog">בלאג</a></li>
+      <li><a href="/posters" class="active">מודעות</a></li>
+      <li><a href="/events">מעמדים</a></li>
+      <li><a href="/video">ווידיאוס</a></li>
+      <li><a href="/pdfs">גליונות</a></li>
+    </ul>
+    <div class="footer-copy">&copy; 2026 Mosdes Vien</div>
+  </div>
+</footer>
+
+<div class="lightbox" id="lightbox">
+  <button class="lightbox-close" id="lightbox-close">&#10005;</button>
+  <button class="lightbox-nav lightbox-prev" id="lightbox-prev">&#8249;</button>
+  <img id="lightbox-img" src="" alt="">
+  <button class="lightbox-nav lightbox-next" id="lightbox-next">&#8250;</button>
+</div>
+
+<script src="/shared-config.js"></script>
+<script src="/hebrew-dates.js"></script>
+<script src="/moisdes-api.js"></script>
+<script src="/chrome.js"></script>
+<script src="/posters.js"></script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login — Moisdes Vien Admin</title>
+<link rel="icon" href="/logo.avif">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://moisdes-worker.moisdesvienweb.workers.dev">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: 'Heebo', sans-serif; background: #2c1608;
+    background-image: linear-gradient(180deg, #3a1e0d 0%, #2c1608 100%);
+    color: #fff;
+  }
+  .card {
+    width: 100%; max-width: 360px; background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.14); border-radius: 4px; padding: 2.5rem 2rem;
+  }
+  .card img { height: 48px; display: block; margin: 0 auto 1.5rem; }
+  h1 { font-size: 1.15rem; font-weight: 700; text-align: center; margin: 0 0 1.5rem; }
+  label { font-size: .82rem; color: rgba(255,255,255,.6); display: block; margin-bottom: .35rem; }
+  input {
+    width: 100%; padding: .6rem .75rem; margin-bottom: 1.1rem; border-radius: 3px;
+    border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.06); color: #fff;
+    font-family: inherit; font-size: .95rem;
+  }
+  input:focus { outline: none; border-color: rgba(255,255,255,.45); }
+  button {
+    width: 100%; padding: .7rem; border: none; border-radius: 3px; cursor: pointer;
+    background: #d9a55c; color: #2c1608; font-weight: 700; font-size: .95rem; font-family: inherit;
+  }
+  button:disabled { opacity: .6; cursor: default; }
+  .msg { min-height: 1.2rem; font-size: .82rem; color: #ff8a80; margin-top: 1rem; text-align: center; }
+</style>
+</head>
+<body>
+<form class="card" id="login-form">
+  <img src="/logo.avif" alt="Moisdes Vien">
+  <h1>Admin Login</h1>
+  <label for="email">Email</label>
+  <input type="email" id="email" required autocomplete="username">
+  <label for="password">Password</label>
+  <input type="password" id="password" required autocomplete="current-password">
+  <button type="submit" id="login-btn">Log in</button>
+  <div class="msg" id="login-msg"></div>
+</form>
+
+<script src="/shared-config.js"></script>
+<script src="/moisdes-api.js"></script>
+<script>
+  const form = document.getElementById('login-form');
+  const msg = document.getElementById('login-msg');
+  const btn = document.getElementById('login-btn');
+
+  if (window.MOISDES.api.isLoggedIn()) location.href = '/admin.html';
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    btn.disabled = true;
+    msg.textContent = '';
+    try {
+      await window.MOISDES.api.login(
+        document.getElementById('email').value.trim(),
+        document.getElementById('password').value
+      );
+      const params = new URLSearchParams(location.search);
+      location.href = params.get('redirect') || '/admin.html';
+    } catch (err) {
+      msg.textContent = err.message || 'Login failed';
+      btn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
