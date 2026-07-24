@@ -474,18 +474,30 @@ async function handleR2Delete({ request, env, user }) {
   return json({ ok: true });
 }
 
-// AWS SigV4 presigned PUT URL for direct browser -> R2 upload.
-// Keys must only contain [A-Za-z0-9_.-/] — enforced client-side at upload time —
-// so a plain per-segment encodeURIComponent is a correct, unambiguous canonical URI.
-async function presignR2PutUrl(env, key) {
+function r2Credentials(env) {
   const accessKeyId = env.R2_ACCESS_KEY_ID;
   const secretAccessKey = env.R2_SECRET_ACCESS_KEY;
   const accountId = env.R2_ACCOUNT_ID;
   if (!accessKeyId || !secretAccessKey || !accountId) {
     throw new HttpError('R2 credentials are not configured on the Worker', 500);
   }
+  return { accessKeyId, secretAccessKey, accountId, host: `${accountId}.r2.cloudflarestorage.com` };
+}
 
-  const host = `${accountId}.r2.cloudflarestorage.com`;
+async function sigV4SigningKey(secretAccessKey, dateStamp, region, service) {
+  let key = await hmacSha256(`AWS4${secretAccessKey}`, dateStamp);
+  key = await hmacSha256(key, region);
+  key = await hmacSha256(key, service);
+  key = await hmacSha256(key, 'aws4_request');
+  return key;
+}
+
+// AWS SigV4 presigned URL for direct browser -> R2 upload (also used for
+// individual multipart-upload parts via extraParams {partNumber, uploadId}).
+// Keys must only contain [A-Za-z0-9_.-/] — enforced client-side at upload time —
+// so a plain per-segment encodeURIComponent is a correct, unambiguous canonical URI.
+async function presignR2PutUrl(env, key, extraParams = {}) {
+  const { accessKeyId, secretAccessKey, host } = r2Credentials(env);
   const region = 'auto';
   const service = 's3';
   const now = new Date();
@@ -502,6 +514,7 @@ async function presignR2PutUrl(env, key) {
     'X-Amz-Date': amzDate,
     'X-Amz-Expires': '3600',
     'X-Amz-SignedHeaders': 'host',
+    ...extraParams,
   };
   const canonicalQuery = Object.keys(queryParams).sort()
     .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
@@ -510,14 +523,49 @@ async function presignR2PutUrl(env, key) {
   const canonicalHeaders = `host:${host}\n`;
   const canonicalRequest = ['PUT', canonicalUri, canonicalQuery, canonicalHeaders, 'host', 'UNSIGNED-PAYLOAD'].join('\n');
   const stringToSign = ['AWS4-HMAC-SHA256', amzDate, credentialScope, await sha256Hex(canonicalRequest)].join('\n');
-
-  let signingKey = await hmacSha256(`AWS4${secretAccessKey}`, dateStamp);
-  signingKey = await hmacSha256(signingKey, region);
-  signingKey = await hmacSha256(signingKey, service);
-  signingKey = await hmacSha256(signingKey, 'aws4_request');
+  const signingKey = await sigV4SigningKey(secretAccessKey, dateStamp, region, service);
   const signature = bufToHex(await hmacSha256(signingKey, stringToSign));
 
   return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+}
+
+// Signed (Authorization-header) S3 API request, executed by the Worker
+// itself using its R2 credentials — used for the small multipart-upload
+// control calls (create/complete/abort), never for file bytes.
+async function signedR2Request(env, method, key, queryParams, body) {
+  const { accessKeyId, secretAccessKey, host } = r2Credentials(env);
+  const region = 'auto';
+  const service = 's3';
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+
+  const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+  const canonicalUri = `/${BUCKET_NAME}/${encodedKey}`;
+  const canonicalQuery = Object.keys(queryParams || {}).sort()
+    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
+    .join('&');
+
+  const payloadHash = await sha256Hex(body || '');
+  const canonicalHeaders = `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
+  const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+  const canonicalRequest = [method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash].join('\n');
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, credentialScope, await sha256Hex(canonicalRequest)].join('\n');
+  const signingKey = await sigV4SigningKey(secretAccessKey, dateStamp, region, service);
+  const signature = bufToHex(await hmacSha256(signingKey, stringToSign));
+
+  const authHeader = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const url = `https://${host}${canonicalUri}${canonicalQuery ? '?' + canonicalQuery : ''}`;
+
+  const headers = { 'x-amz-date': amzDate, 'x-amz-content-sha256': payloadHash, Authorization: authHeader };
+  if (body) headers['Content-Type'] = 'application/xml';
+  return fetch(url, { method, headers, body: body || undefined });
+}
+
+function xmlTag(xml, tag) {
+  const m = xml.match(new RegExp(`<${tag}>([^<]*)</${tag}>`));
+  return m ? m[1] : null;
 }
 
 async function handlePresign({ request, env, user }) {
@@ -528,6 +576,67 @@ async function handlePresign({ request, env, user }) {
   if (!/^[A-Za-z0-9_.\-/]+$/.test(key)) throw new HttpError('Key contains unsupported characters', 400);
   const url = await presignR2PutUrl(env, key);
   return json({ url, key });
+}
+
+// ── Multipart upload (large files: recordings, video) ──────────────────
+// Cloudflare's proxy caps a single request's body size well under what a
+// multi-hundred-MB or multi-GB recording/video needs, so big files are
+// split into parts (each its own direct browser -> R2 PUT, well under the
+// cap) and R2 assembles them. The Worker only handles the small control
+// calls below — file bytes always go straight from the browser to R2.
+
+async function handleMultipartCreate({ request, env, user }) {
+  requireUser(user);
+  const body = await request.json().catch(() => ({}));
+  const key = String(body.key || '');
+  if (!key) throw new HttpError('Missing key', 400);
+  if (!/^[A-Za-z0-9_.\-/]+$/.test(key)) throw new HttpError('Key contains unsupported characters', 400);
+
+  const res = await signedR2Request(env, 'POST', key, { uploads: '' }, '');
+  const text = await res.text();
+  if (!res.ok) throw new HttpError(`Could not start upload: ${text.slice(0, 300)}`, 502);
+  const uploadId = xmlTag(text, 'UploadId');
+  if (!uploadId) throw new HttpError('R2 did not return an upload ID', 502);
+  return json({ uploadId, key });
+}
+
+async function handleMultipartPresignPart({ request, env, user }) {
+  requireUser(user);
+  const body = await request.json().catch(() => ({}));
+  const key = String(body.key || '');
+  const uploadId = String(body.uploadId || '');
+  const partNumber = parseInt(body.partNumber, 10);
+  if (!key || !uploadId || !partNumber) throw new HttpError('Missing key, uploadId, or partNumber', 400);
+  const url = await presignR2PutUrl(env, key, { partNumber: String(partNumber), uploadId });
+  return json({ url });
+}
+
+async function handleMultipartComplete({ request, env, user }) {
+  requireUser(user);
+  const body = await request.json().catch(() => ({}));
+  const key = String(body.key || '');
+  const uploadId = String(body.uploadId || '');
+  const parts = Array.isArray(body.parts) ? body.parts : [];
+  if (!key || !uploadId || !parts.length) throw new HttpError('Missing key, uploadId, or parts', 400);
+
+  const partsXml = [...parts]
+    .sort((a, b) => a.partNumber - b.partNumber)
+    .map((p) => `<Part><PartNumber>${p.partNumber}</PartNumber><ETag>${p.etag}</ETag></Part>`)
+    .join('');
+  const res = await signedR2Request(env, 'POST', key, { uploadId }, `<CompleteMultipartUpload>${partsXml}</CompleteMultipartUpload>`);
+  const text = await res.text();
+  if (!res.ok) throw new HttpError(`Could not complete upload: ${text.slice(0, 300)}`, 502);
+  return json({ ok: true, key });
+}
+
+async function handleMultipartAbort({ request, env, user }) {
+  requireUser(user);
+  const body = await request.json().catch(() => ({}));
+  const key = String(body.key || '');
+  const uploadId = String(body.uploadId || '');
+  if (!key || !uploadId) throw new HttpError('Missing key or uploadId', 400);
+  await signedR2Request(env, 'DELETE', key, { uploadId }, '');
+  return json({ ok: true });
 }
 
 // Public, unauthenticated presign for file-upload fields on public forms.
@@ -711,6 +820,10 @@ const routes = [
   ['GET', /^\/api\/r2-list$/, handleR2List],
   ['DELETE', /^\/api\/r2-delete$/, handleR2Delete],
   ['POST', /^\/api\/presign$/, handlePresign],
+  ['POST', /^\/api\/multipart\/create$/, handleMultipartCreate],
+  ['POST', /^\/api\/multipart\/presign-part$/, handleMultipartPresignPart],
+  ['POST', /^\/api\/multipart\/complete$/, handleMultipartComplete],
+  ['POST', /^\/api\/multipart\/abort$/, handleMultipartAbort],
   ['GET', /^\/api\/r2\/(.+)$/, handleR2Get],
   ['GET', /^\/api\/forms$/, handleListForms],
   ['POST', /^\/api\/forms$/, handleCreateForm],
