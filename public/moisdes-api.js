@@ -28,11 +28,16 @@ window.MOISDES.api = (function () {
     if (token) headers['Authorization'] = `Bearer ${token}`;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
 
-    const res = await fetch(base() + path, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+    let res;
+    try {
+      res = await fetch(base() + path, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    } catch (networkErr) {
+      throw new Error(`Network error calling ${method} ${path}: ${networkErr.message}`);
+    }
 
     const isJson = (res.headers.get('Content-Type') || '').includes('application/json');
     const data = isJson ? await res.json().catch(() => ({})) : await res.text();
@@ -65,10 +70,55 @@ window.MOISDES.api = (function () {
     isLoggedIn() { return !!getToken() && !!getUser(); },
 
     // Direct browser -> R2 upload via a Worker-issued presigned URL.
-    async uploadFile(key, file) {
+    // Files above MULTIPART_THRESHOLD go through chunked multipart upload
+    // instead of a single PUT, since Cloudflare's proxy caps a single
+    // request's body size well under what a recording or video needs.
+    async uploadFile(key, file, onProgress) {
+      const MULTIPART_THRESHOLD = 50 * 1024 * 1024; // 50MB
+      if (file.size > MULTIPART_THRESHOLD) {
+        return this.uploadFileMultipart(key, file, onProgress);
+      }
       const { url } = await request('POST', '/api/presign', { key, mime: file.type || 'application/octet-stream' });
-      const res = await fetch(url, { method: 'PUT', body: file });
+      let res;
+      try {
+        res = await fetch(url, { method: 'PUT', body: file });
+      } catch (networkErr) {
+        throw new Error(`Network error PUTting to R2: ${networkErr.message}`);
+      }
       if (!res.ok) throw new Error(`Upload failed (${res.status})`);
+      if (onProgress) onProgress(1);
+      return key;
+    },
+
+    async uploadFileMultipart(key, file, onProgress) {
+      const PART_SIZE = 10 * 1024 * 1024; // 10MB per part
+      const { uploadId } = await request('POST', '/api/multipart/create', { key });
+      const totalParts = Math.ceil(file.size / PART_SIZE);
+      const parts = [];
+
+      try {
+        for (let i = 0; i < totalParts; i++) {
+          const partNumber = i + 1;
+          const start = i * PART_SIZE;
+          const chunk = file.slice(start, Math.min(start + PART_SIZE, file.size));
+          const { url } = await request('POST', '/api/multipart/presign-part', { key, uploadId, partNumber });
+          let res;
+          try {
+            res = await fetch(url, { method: 'PUT', body: chunk });
+          } catch (networkErr) {
+            throw new Error(`Network error PUTting part ${partNumber}/${totalParts} to R2: ${networkErr.message}`);
+          }
+          if (!res.ok) throw new Error(`Part ${partNumber}/${totalParts} failed (${res.status})`);
+          const etag = res.headers.get('ETag');
+          if (!etag) throw new Error(`Part ${partNumber}/${totalParts} did not return an ETag (check the R2 bucket's CORS ExposeHeaders includes ETag)`);
+          parts.push({ partNumber, etag });
+          if (onProgress) onProgress((i + 1) / totalParts);
+        }
+        await request('POST', '/api/multipart/complete', { key, uploadId, parts });
+      } catch (err) {
+        request('POST', '/api/multipart/abort', { key, uploadId }).catch(() => {});
+        throw err;
+      }
       return key;
     },
 
