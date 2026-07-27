@@ -135,7 +135,7 @@ const CONTENT_SCHEMAS = {
 const CONTENT_MIGRATIONS = {
   posts: ['tags TEXT', 'category TEXT', 'folder_url TEXT', 'deleted_at TEXT'],
   posters: ['folder_url TEXT', 'deleted_at TEXT'],
-  events: ['tags TEXT', 'folder_url TEXT', 'deleted_at TEXT'],
+  events: ['tags TEXT', 'folder_url TEXT', 'thumb_url TEXT', 'deleted_at TEXT'],
   videos: ['tags TEXT', 'video_url TEXT', 'folder_url TEXT', 'deleted_at TEXT'],
   pdfs: ['language TEXT', 'parsha TEXT', 'year TEXT', 'thumb_url TEXT', 'deleted_at TEXT'],
   simchas: ['deleted_at TEXT'],
@@ -144,7 +144,7 @@ const CONTENT_MIGRATIONS = {
 const CONTENT_FIELDS = {
   posts: ['date', 'title', 'body', 'folder_url', 'tags', 'category'],
   posters: ['date', 'parsha', 'folder_url'],
-  events: ['date', 'title', 'location', 'category', 'description', 'tags', 'folder_url'],
+  events: ['date', 'title', 'location', 'category', 'description', 'tags', 'folder_url', 'thumb_url'],
   videos: ['date', 'title', 'location', 'category', 'description', 'tags', 'video_url', 'folder_url'],
   pdfs: ['date', 'title', 'category', 'language', 'parsha', 'year', 'pdf_url', 'thumb_url'],
   simchas: ['text', 'date_added'],
@@ -695,7 +695,7 @@ async function handlePresign({ request, env, user }) {
   const body = await request.json().catch(() => ({}));
   const key = String(body.key || '');
   if (!key) throw new HttpError('Missing key', 400);
-  if (!/^[A-Za-z0-9_.\-/]+$/.test(key)) throw new HttpError('Key contains unsupported characters', 400);
+  if (!/^[A-Za-z0-9_.\-/\u0590-\u05FF]+$/.test(key)) throw new HttpError('Key contains unsupported characters', 400);
   const url = await presignR2PutUrl(env, key);
   return json({ url, key });
 }
@@ -712,7 +712,7 @@ async function handleMultipartCreate({ request, env, user }) {
   const body = await request.json().catch(() => ({}));
   const key = String(body.key || '');
   if (!key) throw new HttpError('Missing key', 400);
-  if (!/^[A-Za-z0-9_.\-/]+$/.test(key)) throw new HttpError('Key contains unsupported characters', 400);
+  if (!/^[A-Za-z0-9_.\-/\u0590-\u05FF]+$/.test(key)) throw new HttpError('Key contains unsupported characters', 400);
 
   const res = await signedR2Request(env, 'POST', key, { uploads: '' }, '');
   const text = await res.text();
