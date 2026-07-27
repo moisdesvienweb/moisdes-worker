@@ -136,7 +136,7 @@ const CONTENT_MIGRATIONS = {
   posts: ['tags TEXT', 'category TEXT', 'folder_url TEXT', 'deleted_at TEXT'],
   posters: ['folder_url TEXT', 'deleted_at TEXT'],
   events: ['tags TEXT', 'folder_url TEXT', 'thumb_url TEXT', 'deleted_at TEXT'],
-  videos: ['tags TEXT', 'video_url TEXT', 'folder_url TEXT', 'deleted_at TEXT'],
+  videos: ['tags TEXT', 'video_url TEXT', 'folder_url TEXT', 'video_file_url TEXT', 'deleted_at TEXT'],
   pdfs: ['language TEXT', 'parsha TEXT', 'year TEXT', 'thumb_url TEXT', 'deleted_at TEXT'],
   simchas: ['deleted_at TEXT'],
 };
@@ -145,7 +145,7 @@ const CONTENT_FIELDS = {
   posts: ['date', 'title', 'body', 'folder_url', 'tags', 'category'],
   posters: ['date', 'parsha', 'folder_url'],
   events: ['date', 'title', 'location', 'category', 'description', 'tags', 'folder_url', 'thumb_url'],
-  videos: ['date', 'title', 'location', 'category', 'description', 'tags', 'video_url', 'folder_url'],
+  videos: ['date', 'title', 'location', 'category', 'description', 'tags', 'video_url', 'folder_url', 'video_file_url'],
   pdfs: ['date', 'title', 'category', 'language', 'parsha', 'year', 'pdf_url', 'thumb_url'],
   simchas: ['text', 'date_added'],
 };
