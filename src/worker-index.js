@@ -125,6 +125,11 @@ const CONTENT_SCHEMAS = {
     date TEXT, title TEXT, category TEXT, language TEXT, parsha TEXT, year TEXT, pdf_url TEXT, thumb_url TEXT,
     uploaded_by INTEGER, created_at TEXT DEFAULT (datetime('now')), deleted_at TEXT
   )`,
+  simchas: `CREATE TABLE IF NOT EXISTS simchas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT, date_added TEXT DEFAULT (datetime('now')),
+    uploaded_by INTEGER, created_at TEXT DEFAULT (datetime('now')), deleted_at TEXT
+  )`,
 };
 
 const CONTENT_MIGRATIONS = {
@@ -133,6 +138,7 @@ const CONTENT_MIGRATIONS = {
   events: ['tags TEXT', 'folder_url TEXT', 'deleted_at TEXT'],
   videos: ['tags TEXT', 'video_url TEXT', 'folder_url TEXT', 'deleted_at TEXT'],
   pdfs: ['language TEXT', 'parsha TEXT', 'year TEXT', 'thumb_url TEXT', 'deleted_at TEXT'],
+  simchas: ['deleted_at TEXT'],
 };
 
 const CONTENT_FIELDS = {
@@ -141,6 +147,7 @@ const CONTENT_FIELDS = {
   events: ['date', 'title', 'location', 'category', 'description', 'tags', 'folder_url'],
   videos: ['date', 'title', 'location', 'category', 'description', 'tags', 'video_url', 'folder_url'],
   pdfs: ['date', 'title', 'category', 'language', 'parsha', 'year', 'pdf_url', 'thumb_url'],
+  simchas: ['text', 'date_added'],
 };
 
 async function ensureContentTable(table, env) {
@@ -250,12 +257,21 @@ async function ensureFormsTables(env) {
   )`).run();
 }
 
+async function ensureDafTable(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS daf_entries (
+    date TEXT PRIMARY KEY,
+    text TEXT,
+    updated_at TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
 let migrated = false;
 async function ensureAllTables(env) {
   if (migrated) return;
   await ensureCoreTables(env);
   for (const t of Object.keys(CONTENT_SCHEMAS)) await ensureContentTable(t, env);
   await ensureFormsTables(env);
+  await ensureDafTable(env);
   migrated = true;
 }
 
@@ -383,11 +399,23 @@ async function saveNewTaxonomy(body, env) {
   }
 }
 
-async function handleListContent({ match, env }) {
+const ORDER_COLUMN = { simchas: 'date_added' };
+
+async function handleListContent({ match, url, env }) {
   const table = match[1];
+  const orderCol = ORDER_COLUMN[table] || 'date';
   const { results } = await env.DB.prepare(
-    `SELECT * FROM ${table} WHERE deleted_at IS NULL ORDER BY date DESC, id DESC`
+    `SELECT * FROM ${table} WHERE deleted_at IS NULL ORDER BY ${orderCol} DESC, id DESC`
   ).all();
+
+  if (url.searchParams.get('format') === 'csv') {
+    const cols = ['id', ...CONTENT_FIELDS[table]];
+    const lines = [cols.map(csvEscape).join(',')];
+    for (const r of results) lines.push(cols.map((c) => csvEscape(r[c])).join(','));
+    return new Response(lines.join('\n'), {
+      headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${table}.csv"` },
+    });
+  }
   return json({ [table]: results });
 }
 
@@ -436,6 +464,86 @@ async function handleCategories({ env }) {
   return json({ categories: results.map((r) => r.name) });
 }
 
+// ── HANDLERS: daf calendar (ובהם נהגה) ─────────────────────────────
+
+async function handleDafEntries({ env }) {
+  const { results } = await env.DB.prepare('SELECT date, text FROM daf_entries ORDER BY date').all();
+  return json({ entries: results });
+}
+
+// Bulk upsert from an admin-parsed Excel sheet: [{date: 'YYYY-MM-DD', text}, ...]
+async function handleDafBulkUpsert({ request, env, user }) {
+  requireUser(user);
+  const body = await request.json().catch(() => ({}));
+  const entries = Array.isArray(body.entries) ? body.entries : [];
+  for (const e of entries) {
+    if (!e.date) continue;
+    await env.DB.prepare(
+      `INSERT INTO daf_entries (date, text, updated_at) VALUES (?,?,datetime('now'))
+       ON CONFLICT(date) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at`
+    ).bind(e.date, e.text || '').run();
+  }
+  return json({ ok: true, count: entries.length });
+}
+
+// ── HANDLERS: Google Calendar sync ──────────────────────────────────
+// Fetched server-side (not client-side) because Google's public .ics
+// export doesn't send CORS headers a browser would need to read it directly.
+
+function unfoldIcs(text) {
+  // ICS "folds" long lines with a leading space/tab on the continuation.
+  return text.replace(/\r\n/g, '\n').replace(/\n[ \t]/g, '');
+}
+function icsUnescape(s) {
+  return String(s || '').replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
+}
+function parseIcsDate(raw) {
+  // All-day events: YYYYMMDD. Timed events: YYYYMMDDTHHMMSS[Z].
+  const m = String(raw || '').match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?$/);
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s, z] = m;
+  if (h === undefined) return { iso: `${y}-${mo}-${d}`, allDay: true };
+  const iso = `${y}-${mo}-${d}T${h}:${mi}:${s}${z ? 'Z' : ''}`;
+  return { iso, allDay: false };
+}
+
+async function handleGcalEvents({ env }) {
+  const calendarId = env.GCAL_CALENDAR_ID;
+  if (!calendarId) throw new HttpError('GCAL_CALENDAR_ID is not configured on the Worker', 500);
+  const url = `https://calendar.google.com/calendar/ical/${encodeURIComponent(calendarId)}/public/basic.ics`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new HttpError('Could not fetch the Google Calendar feed (is it shared publicly?)', 502);
+  const text = unfoldIcs(await res.text());
+
+  const events = [];
+  const blocks = text.split('BEGIN:VEVENT').slice(1);
+  for (const block of blocks) {
+    const body = block.split('END:VEVENT')[0];
+    const get = (tag) => {
+      const m = body.match(new RegExp(`^${tag}[^:\\n]*:(.*)$`, 'm'));
+      return m ? icsUnescape(m[1].trim()) : '';
+    };
+    const dtstart = parseIcsDate(get('DTSTART'));
+    if (!dtstart) continue;
+    events.push({
+      summary: get('SUMMARY'),
+      description: get('DESCRIPTION'),
+      location: get('LOCATION'),
+      start: dtstart.iso,
+      allDay: dtstart.allDay,
+    });
+  }
+
+  const now = new Date().toISOString();
+  const upcoming = events
+    .filter((e) => e.start >= now.slice(0, 10))
+    .sort((a, b) => a.start.localeCompare(b.start))
+    .slice(0, 50);
+
+  return json({ events: upcoming });
+}
+
 // ── HANDLERS: R2 ────────────────────────────────────────────────────
 
 const MIME_MAP = {
@@ -471,6 +579,20 @@ async function handleR2Delete({ request, env, user }) {
   const body = await request.json().catch(() => ({}));
   if (!body.key) throw new HttpError('Missing key', 400);
   await env.R2.delete(body.key);
+  return json({ ok: true });
+}
+
+// R2 has no native rename — stream the object to its new key, then drop the
+// old one. Streaming (not buffering) keeps this cheap even for large files.
+async function handleR2Rename({ request, env, user }) {
+  requireUser(user);
+  const body = await request.json().catch(() => ({}));
+  if (!body.oldKey || !body.newKey) throw new HttpError('Missing oldKey or newKey', 400);
+  if (body.oldKey === body.newKey) return json({ ok: true });
+  const obj = await env.R2.get(body.oldKey);
+  if (!obj) throw new HttpError('Source file not found', 404);
+  await env.R2.put(body.newKey, obj.body, { httpMetadata: obj.httpMetadata });
+  await env.R2.delete(body.oldKey);
   return json({ ok: true });
 }
 
@@ -819,6 +941,7 @@ const routes = [
   ['GET', /^\/api\/categories$/, handleCategories],
   ['GET', /^\/api\/r2-list$/, handleR2List],
   ['DELETE', /^\/api\/r2-delete$/, handleR2Delete],
+  ['POST', /^\/api\/r2-rename$/, handleR2Rename],
   ['POST', /^\/api\/presign$/, handlePresign],
   ['POST', /^\/api\/multipart\/create$/, handleMultipartCreate],
   ['POST', /^\/api\/multipart\/presign-part$/, handleMultipartPresignPart],
@@ -835,10 +958,13 @@ const routes = [
   ['GET', /^\/api\/forms\/(\d+)\/responses$/, handleFormResponses],
   ['PUT', /^\/api\/forms\/(\d+)$/, handleUpdateForm],
   ['DELETE', /^\/api\/forms\/(\d+)$/, handleDeleteForm],
-  ['GET', /^\/api\/(posts|posters|events|videos|pdfs)$/, handleListContent],
-  ['POST', /^\/api\/(posts|posters|events|videos|pdfs)$/, handleCreateContent],
-  ['PUT', /^\/api\/(posts|posters|events|videos|pdfs)\/(\d+)$/, handleUpdateContent],
-  ['DELETE', /^\/api\/(posts|posters|events|videos|pdfs)\/(\d+)$/, handleDeleteContent],
+  ['GET', /^\/api\/(posts|posters|events|videos|pdfs|simchas)$/, handleListContent],
+  ['POST', /^\/api\/(posts|posters|events|videos|pdfs|simchas)$/, handleCreateContent],
+  ['PUT', /^\/api\/(posts|posters|events|videos|pdfs|simchas)\/(\d+)$/, handleUpdateContent],
+  ['DELETE', /^\/api\/(posts|posters|events|videos|pdfs|simchas)\/(\d+)$/, handleDeleteContent],
+  ['GET', /^\/api\/daf-entries$/, handleDafEntries],
+  ['POST', /^\/api\/daf-entries\/bulk$/, handleDafBulkUpsert],
+  ['GET', /^\/api\/gcal-events$/, handleGcalEvents],
 ];
 
 async function handleRequest(request, env, ctx) {
