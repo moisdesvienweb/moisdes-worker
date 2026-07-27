@@ -510,7 +510,7 @@ function parseIcsDate(raw) {
 async function handleGcalEvents({ env }) {
   const calendarId = env.GCAL_CALENDAR_ID;
   if (!calendarId) throw new HttpError('GCAL_CALENDAR_ID is not configured on the Worker', 500);
-  const url = `https://calendar.google.com/calendar/ical/${encodeURIComponent(calendarId)}/public/basic.ics`;
+  const url = `https://calendar.google.com/calendar/ical/MWI3MjQyYTMyNTA3MGU2YjUwMGMxMzA3YWFkNGQxNzJlMTNjM2Q5N2RlZDZjYTkyZTM3MTU3NmMzMzhiZmU3OUBncm91cC5jYWxlbmRhci5nb29nbGUuY29t/public/basic.ics`;
 
   const res = await fetch(url);
   if (!res.ok) throw new HttpError('Could not fetch the Google Calendar feed (is it shared publicly?)', 502);
