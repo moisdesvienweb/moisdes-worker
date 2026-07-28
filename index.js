@@ -265,6 +265,15 @@ async function ensureDafTable(env) {
   )`).run();
 }
 
+// Generic key/value store for small site-wide settings (e.g. the
+// newsletter signup link) that don't need their own dedicated table.
+async function ensureSettingsTable(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS site_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  )`).run();
+}
+
 let migrated = false;
 async function ensureAllTables(env) {
   if (migrated) return;
@@ -272,6 +281,7 @@ async function ensureAllTables(env) {
   for (const t of Object.keys(CONTENT_SCHEMAS)) await ensureContentTable(t, env);
   await ensureFormsTables(env);
   await ensureDafTable(env);
+  await ensureSettingsTable(env);
   migrated = true;
 }
 
@@ -464,6 +474,28 @@ async function handleCategories({ env }) {
   return json({ categories: results.map((r) => r.name) });
 }
 
+// ── HANDLERS: site settings ──────────────────────────────────────────
+
+async function handleGetSettings({ env }) {
+  const { results } = await env.DB.prepare('SELECT key, value FROM site_settings').all();
+  const settings = {};
+  for (const r of results) settings[r.key] = r.value;
+  return json({ settings });
+}
+
+async function handleUpdateSettings({ request, env, user }) {
+  requireUser(user);
+  const body = await request.json().catch(() => ({}));
+  const entries = Object.entries(body.settings || {});
+  for (const [key, value] of entries) {
+    await env.DB.prepare(
+      `INSERT INTO site_settings (key, value) VALUES (?,?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    ).bind(key, String(value ?? '')).run();
+  }
+  return json({ ok: true });
+}
+
 // ── HANDLERS: daf calendar (ובהם נהגה) ─────────────────────────────
 
 async function handleDafEntries({ env }) {
@@ -510,7 +542,7 @@ function parseIcsDate(raw) {
 async function handleGcalEvents({ env }) {
   const calendarId = env.GCAL_CALENDAR_ID;
   if (!calendarId) throw new HttpError('GCAL_CALENDAR_ID is not configured on the Worker', 500);
-  const url = `https://calendar.google.com/calendar/ical/1b7242a325070e6b500c1307aad4d172e13c3d97ded6ca92e371576c338bfe79%40group.calendar.google.com/private-c88522bdd3468850143904b09a1712e7/basic.ics`;
+  const url = `https://calendar.google.com/calendar/ical/${encodeURIComponent(calendarId)}/public/basic.ics`;
 
   const res = await fetch(url);
   if (!res.ok) throw new HttpError('Could not fetch the Google Calendar feed (is it shared publicly?)', 502);
@@ -695,7 +727,7 @@ async function handlePresign({ request, env, user }) {
   const body = await request.json().catch(() => ({}));
   const key = String(body.key || '');
   if (!key) throw new HttpError('Missing key', 400);
-  if (!/^[A-Za-z0-9_.\-/\u0590-\u05FF]+$/.test(key)) throw new HttpError('Key contains unsupported characters', 400);
+  if (/[\\?#%*:"<>|\x00-\x1F]/.test(key)) throw new HttpError('Key contains unsupported characters', 400);
   const url = await presignR2PutUrl(env, key);
   return json({ url, key });
 }
@@ -712,7 +744,7 @@ async function handleMultipartCreate({ request, env, user }) {
   const body = await request.json().catch(() => ({}));
   const key = String(body.key || '');
   if (!key) throw new HttpError('Missing key', 400);
-  if (!/^[A-Za-z0-9_.\-/\u0590-\u05FF]+$/.test(key)) throw new HttpError('Key contains unsupported characters', 400);
+  if (/[\\?#%*:"<>|\x00-\x1F]/.test(key)) throw new HttpError('Key contains unsupported characters', 400);
 
   const res = await signedR2Request(env, 'POST', key, { uploads: '' }, '');
   const text = await res.text();
@@ -771,8 +803,9 @@ async function handleFormPresign({ match, request, env }) {
 
   const body = await request.json().catch(() => ({}));
   const safeName = String(body.filename || 'file')
-    .replace(/[^A-Za-z0-9_.-]/g, '_')
-    .slice(-80);
+    .replace(/[\\/?#%*:"<>|\x00-\x1F]/g, '_')
+    .replace(/\s+/g, ' ').trim()
+    .slice(-80) || 'file';
   const key = `form-uploads/${slug}/${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${safeName}`;
   const url = await presignR2PutUrl(env, key);
   return json({ url, key });
@@ -965,6 +998,8 @@ const routes = [
   ['GET', /^\/api\/daf-entries$/, handleDafEntries],
   ['POST', /^\/api\/daf-entries\/bulk$/, handleDafBulkUpsert],
   ['GET', /^\/api\/gcal-events$/, handleGcalEvents],
+  ['GET', /^\/api\/settings$/, handleGetSettings],
+  ['PUT', /^\/api\/settings$/, handleUpdateSettings],
 ];
 
 async function handleRequest(request, env, ctx) {
