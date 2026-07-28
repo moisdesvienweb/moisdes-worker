@@ -604,13 +604,17 @@ async function handleGcalEvents({ env }) {
     });
   }
 
-  const now = new Date().toISOString();
-  const upcoming = events
-    .filter((e) => e.start >= now.slice(0, 10))
-    .sort((a, b) => a.start.localeCompare(b.start))
-    .slice(0, 50);
+  // Past and future both, sorted ascending — callers that only want
+  // upcoming events filter client-side (this also feeds a full month-grid
+  // calendar view, which needs past dates too).
+  events.sort((a, b) => a.start.localeCompare(b.start));
+  return json({ events: events.slice(0, 300) });
+}
 
-  return json({ events: upcoming });
+async function handleGcalSubscribeUrl({ env }) {
+  const calendarId = env.GCAL_CALENDAR_ID;
+  if (!calendarId) throw new HttpError('GCAL_CALENDAR_ID is not configured on the Worker', 500);
+  return json({ url: `https://calendar.google.com/calendar/render?cid=${encodeURIComponent(calendarId)}` });
 }
 
 // ── HANDLERS: R2 ────────────────────────────────────────────────────
@@ -1035,6 +1039,7 @@ const routes = [
   ['GET', /^\/api\/daf-entries$/, handleDafEntries],
   ['POST', /^\/api\/daf-entries\/bulk$/, handleDafBulkUpsert],
   ['GET', /^\/api\/gcal-events$/, handleGcalEvents],
+  ['GET', /^\/api\/gcal-subscribe-url$/, handleGcalSubscribeUrl],
   ['GET', /^\/api\/settings$/, handleGetSettings],
   ['PUT', /^\/api\/settings$/, handleUpdateSettings],
   ['POST', /^\/api\/track$/, handleTrack],
