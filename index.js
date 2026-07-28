@@ -274,6 +274,16 @@ async function ensureSettingsTable(env) {
   )`).run();
 }
 
+async function ensureAnalyticsTable(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS analytics_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT,
+    path TEXT,
+    label TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
 let migrated = false;
 async function ensureAllTables(env) {
   if (migrated) return;
@@ -282,6 +292,7 @@ async function ensureAllTables(env) {
   await ensureFormsTables(env);
   await ensureDafTable(env);
   await ensureSettingsTable(env);
+  await ensureAnalyticsTable(env);
   migrated = true;
 }
 
@@ -494,6 +505,32 @@ async function handleUpdateSettings({ request, env, user }) {
     ).bind(key, String(value ?? '')).run();
   }
   return json({ ok: true });
+}
+
+// ── HANDLERS: analytics (page views + clicks/shares) ────────────────
+
+async function handleTrack({ request, env }) {
+  const body = await request.json().catch(() => ({}));
+  const kind = String(body.kind || 'view').slice(0, 20);
+  const path = String(body.path || '').slice(0, 300);
+  const label = String(body.label || '').slice(0, 200);
+  if (!path) throw new HttpError('Missing path', 400);
+  await env.DB.prepare('INSERT INTO analytics_events (kind, path, label) VALUES (?,?,?)').bind(kind, path, label).run();
+  return json({ ok: true });
+}
+
+async function handleAnalyticsSummary({ env, user }) {
+  requireUser(user);
+  const totals = await env.DB.prepare(
+    'SELECT kind, COUNT(*) as count FROM analytics_events GROUP BY kind'
+  ).all();
+  const byPath = await env.DB.prepare(
+    'SELECT path, kind, COUNT(*) as count FROM analytics_events GROUP BY path, kind ORDER BY count DESC LIMIT 30'
+  ).all();
+  const byLabel = await env.DB.prepare(
+    "SELECT label, kind, COUNT(*) as count FROM analytics_events WHERE label != '' GROUP BY label, kind ORDER BY count DESC LIMIT 30"
+  ).all();
+  return json({ totals: totals.results, byPath: byPath.results, byLabel: byLabel.results });
 }
 
 // ── HANDLERS: daf calendar (ובהם נהגה) ─────────────────────────────
@@ -1000,6 +1037,8 @@ const routes = [
   ['GET', /^\/api\/gcal-events$/, handleGcalEvents],
   ['GET', /^\/api\/settings$/, handleGetSettings],
   ['PUT', /^\/api\/settings$/, handleUpdateSettings],
+  ['POST', /^\/api\/track$/, handleTrack],
+  ['GET', /^\/api\/analytics\/summary$/, handleAnalyticsSummary],
 ];
 
 async function handleRequest(request, env, ctx) {
