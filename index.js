@@ -573,7 +573,20 @@ function parseIcsDate(raw) {
   const [, y, mo, d, h, mi, s, z] = m;
   if (h === undefined) return { iso: `${y}-${mo}-${d}`, allDay: true };
   const iso = `${y}-${mo}-${d}T${h}:${mi}:${s}${z ? 'Z' : ''}`;
-  return { iso, allDay: false };
+  return { iso, allDay: false, isUtc: !!z };
+}
+
+// Google exports timed events in UTC (a trailing Z). Slicing that string's
+// date portion directly gives the wrong calendar day for evening events in
+// US timezones (e.g. 7pm Eastern becomes past midnight UTC, rolling to the
+// next date) — so timed/UTC events get their date recomputed in the
+// community's local timezone instead. All-day events have no time
+// component to convert and are already correct as-is.
+function icsLocalDateStr(dtstart) {
+  if (dtstart.allDay || !dtstart.isUtc) return dtstart.iso.slice(0, 10);
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(dtstart.iso));
 }
 
 async function handleGcalEvents({ env }) {
@@ -600,6 +613,7 @@ async function handleGcalEvents({ env }) {
       description: get('DESCRIPTION'),
       location: get('LOCATION'),
       start: dtstart.iso,
+      date: icsLocalDateStr(dtstart),
       allDay: dtstart.allDay,
     });
   }
