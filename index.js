@@ -919,10 +919,15 @@ async function handleUpdateForm({ match, request, env, user }) {
   if (body.slug !== undefined) {
     const slug = String(body.slug || '').trim().toLowerCase();
     if (!/^[a-z0-9-]+$/.test(slug)) throw new HttpError('Slug may only contain lowercase letters, numbers, and hyphens', 400);
-    const clash = await env.DB.prepare('SELECT id FROM forms WHERE slug = ? AND id != ? AND deleted_at IS NULL').bind(slug, id).first();
+    const numericId = Number(id);
+    const clash = await env.DB.prepare('SELECT id FROM forms WHERE slug = ? AND id != ? AND deleted_at IS NULL').bind(slug, numericId).first();
     if (clash) throw new HttpError('That slug is already taken by another form', 409);
-    await env.DB.prepare('UPDATE forms SET title = ?, slug = ?, settings = ? WHERE id = ?')
-      .bind(String(body.title || ''), slug, settings, id).run();
+    try {
+      await env.DB.prepare('UPDATE forms SET title = ?, slug = ?, settings = ? WHERE id = ?')
+        .bind(String(body.title || ''), slug, settings, numericId).run();
+    } catch (e) {
+      throw new HttpError('That slug is already taken by another form', 409);
+    }
     return json({ ok: true, slug });
   }
 
