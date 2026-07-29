@@ -915,6 +915,17 @@ async function handleUpdateForm({ match, request, env, user }) {
   const id = match[1];
   const body = await request.json().catch(() => ({}));
   const settings = JSON.stringify(body.settings || {});
+
+  if (body.slug !== undefined) {
+    const slug = String(body.slug || '').trim().toLowerCase();
+    if (!/^[a-z0-9-]+$/.test(slug)) throw new HttpError('Slug may only contain lowercase letters, numbers, and hyphens', 400);
+    const clash = await env.DB.prepare('SELECT id FROM forms WHERE slug = ? AND id != ? AND deleted_at IS NULL').bind(slug, id).first();
+    if (clash) throw new HttpError('That slug is already taken by another form', 409);
+    await env.DB.prepare('UPDATE forms SET title = ?, slug = ?, settings = ? WHERE id = ?')
+      .bind(String(body.title || ''), slug, settings, id).run();
+    return json({ ok: true, slug });
+  }
+
   await env.DB.prepare('UPDATE forms SET title = ?, settings = ? WHERE id = ?')
     .bind(String(body.title || ''), settings, id).run();
   return json({ ok: true });
