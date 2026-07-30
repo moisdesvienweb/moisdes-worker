@@ -701,10 +701,21 @@ async function sigV4SigningKey(secretAccessKey, dateStamp, region, service) {
   return key;
 }
 
+// AWS SigV4 requires percent-encoding every byte outside its unreserved
+// set (A-Za-z0-9-_.~) — but JS's encodeURIComponent deliberately leaves
+// !, *, ', (, ) unescaped (they're valid in a URI without encoding).
+// Filenames with an apostrophe (common in Hebrew/Yiddish titles using
+// ' / '' for geresh/gershayim) would sign fine but the byte the browser
+// actually sends differs from what got signed once R2 re-canonicalizes
+// it strictly — signature mismatch, 403, and R2 omits CORS headers on
+// that rejection, which then shows up in the browser as a misleading
+// "blocked by CORS policy" error with no hint of the real cause.
+function awsUriEncode(str) {
+  return encodeURIComponent(str).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
 // AWS SigV4 presigned URL for direct browser -> R2 upload (also used for
 // individual multipart-upload parts via extraParams {partNumber, uploadId}).
-// Keys must only contain [A-Za-z0-9_.-/] — enforced client-side at upload time —
-// so a plain per-segment encodeURIComponent is a correct, unambiguous canonical URI.
 async function presignR2PutUrl(env, key, extraParams = {}) {
   const { accessKeyId, secretAccessKey, host } = r2Credentials(env);
   const region = 'auto';
@@ -714,7 +725,7 @@ async function presignR2PutUrl(env, key, extraParams = {}) {
   const dateStamp = amzDate.slice(0, 8);
   const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
 
-  const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+  const encodedKey = key.split('/').map(awsUriEncode).join('/');
   const canonicalUri = `/${BUCKET_NAME}/${encodedKey}`;
 
   const queryParams = {
@@ -726,7 +737,7 @@ async function presignR2PutUrl(env, key, extraParams = {}) {
     ...extraParams,
   };
   const canonicalQuery = Object.keys(queryParams).sort()
-    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
+    .map((k) => `${awsUriEncode(k)}=${awsUriEncode(queryParams[k])}`)
     .join('&');
 
   const canonicalHeaders = `host:${host}\n`;
@@ -750,10 +761,10 @@ async function signedR2Request(env, method, key, queryParams, body) {
   const dateStamp = amzDate.slice(0, 8);
   const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
 
-  const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+  const encodedKey = key.split('/').map(awsUriEncode).join('/');
   const canonicalUri = `/${BUCKET_NAME}/${encodedKey}`;
   const canonicalQuery = Object.keys(queryParams || {}).sort()
-    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
+    .map((k) => `${awsUriEncode(k)}=${awsUriEncode(queryParams[k])}`)
     .join('&');
 
   const payloadHash = await sha256Hex(body || '');
