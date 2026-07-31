@@ -653,9 +653,16 @@ async function handleHebcalZmanim({ url, ctx }) {
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
-  const hebcalUrl = `https://www.hebcal.com/zmanim?cfg=json&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&date=${encodeURIComponent(date)}`;
+  // Hebcal's zmanim endpoint wants the full "latitude"/"longitude" param
+  // names, not "lat"/"lon" — confirmed via a direct browser test against
+  // the live API, which came back {"error":"Location is required"}
+  // because those short names weren't being recognized at all.
+  const hebcalUrl = `https://www.hebcal.com/zmanim?cfg=json&latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}&date=${encodeURIComponent(date)}`;
   const upstream = await fetch(hebcalUrl, { headers: { 'User-Agent': 'MoisdesVienPlatform/1.0 (+https://moisdesvien.com)' } });
-  if (!upstream.ok) throw new HttpError('Hebcal zmanim lookup failed', 502);
+  if (!upstream.ok) {
+    const errText = await upstream.text().catch(() => '');
+    throw new HttpError(`Hebcal zmanim lookup failed: ${errText.slice(0, 200)}`, 502);
+  }
   const data = await upstream.json().catch(() => null);
   if (!data || !data.times) throw new HttpError('Hebcal returned an unexpected response', 502);
 
