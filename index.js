@@ -284,6 +284,22 @@ async function ensureAnalyticsTable(env) {
   )`).run();
 }
 
+// Per-user, per-section read/write flags for 'editor' role accounts.
+// 'admin'/'superadmin' bypass this entirely (see getEffectivePermissions)
+// — it only narrows what an editor can see/do in the admin panel. A
+// section with no row here defaults to no access (opt-in, not opt-out),
+// so a freshly created editor starts locked out of everything until an
+// admin explicitly grants sections.
+async function ensurePermissionsTable(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS user_permissions (
+    user_id INTEGER NOT NULL,
+    section TEXT NOT NULL,
+    can_read INTEGER DEFAULT 0,
+    can_write INTEGER DEFAULT 0,
+    PRIMARY KEY (user_id, section)
+  )`).run();
+}
+
 let migrated = false;
 async function ensureAllTables(env) {
   if (migrated) return;
@@ -293,6 +309,7 @@ async function ensureAllTables(env) {
   await ensureDafTable(env);
   await ensureSettingsTable(env);
   await ensureAnalyticsTable(env);
+  await ensurePermissionsTable(env);
   migrated = true;
 }
 
@@ -336,6 +353,37 @@ function requireAdmin(user) {
   return user;
 }
 
+// Every admin-panel section an editor's access can be scoped to. "users"
+// (creating/editing accounts and granting permissions) is deliberately
+// left out — that stays admin/superadmin-only, not delegable, since it's
+// the one section that could otherwise be used to self-escalate.
+const SECTIONS = ['posts', 'posters', 'events', 'videos', 'pdfs', 'simchas', 'forms', 'daf', 'settings'];
+
+// admin/superadmin always get full read+write on every section; an
+// 'editor' gets exactly what's stored for them in user_permissions (no
+// row for a section = no access to that section).
+async function getEffectivePermissions(env, user) {
+  const fullAccess = user.role === 'admin' || user.role === 'superadmin';
+  const perms = {};
+  for (const s of SECTIONS) perms[s] = { read: fullAccess, write: fullAccess };
+  if (fullAccess) return perms;
+  const { results } = await env.DB.prepare(
+    'SELECT section, can_read, can_write FROM user_permissions WHERE user_id = ?'
+  ).bind(user.id).all();
+  for (const row of results) {
+    if (perms[row.section]) perms[row.section] = { read: !!row.can_read, write: !!row.can_write };
+  }
+  return perms;
+}
+
+async function requireSection(env, user, section, mode) {
+  requireUser(user);
+  const perms = await getEffectivePermissions(env, user);
+  if (!perms[section] || !perms[section][mode]) {
+    throw new HttpError(`You don't have ${mode} access to ${section}`, 403);
+  }
+}
+
 // ── HANDLERS: core ────────────────────────────────────────────────────
 
 async function handlePing() {
@@ -357,7 +405,8 @@ async function handleLogin({ request, env }) {
   // SELECT * also picks up any legacy columns (e.g. an old `password` field) —
   // only return the columns the client actually needs.
   const user = { id: row.id, name: row.name, email: row.email, role: row.role, active: row.active, created_at: row.created_at };
-  return json({ token, expires, user });
+  const permissions = await getEffectivePermissions(env, user);
+  return json({ token, expires, user, permissions });
 }
 
 async function handleLogout({ request, env }) {
@@ -366,9 +415,10 @@ async function handleLogout({ request, env }) {
   return json({ ok: true });
 }
 
-async function handleMe({ user }) {
+async function handleMe({ env, user }) {
   requireUser(user);
-  return json({ user });
+  const permissions = await getEffectivePermissions(env, user);
+  return json({ user, permissions });
 }
 
 async function handleRefresh({ request, env, user }) {
@@ -376,15 +426,42 @@ async function handleRefresh({ request, env, user }) {
   const token = bearerToken(request);
   const expires = new Date(Date.now() + SESSION_DAYS * 24 * 3600 * 1000).toISOString();
   await env.DB.prepare('UPDATE sessions SET expires_at = ? WHERE token = ?').bind(expires, token).run();
-  return json({ token, expires, user });
+  const permissions = await getEffectivePermissions(env, user);
+  return json({ token, expires, user, permissions });
 }
 
 async function handleListUsers({ env, user }) {
-  requireUser(user);
+  requireAdmin(user);
   const { results } = await env.DB.prepare(
     'SELECT id,name,email,role,active,created_at FROM users ORDER BY id'
   ).all();
   return json({ users: results });
+}
+
+async function handleGetUserPermissions({ match, env, user }) {
+  requireAdmin(user);
+  const targetId = Number(match[1]);
+  const target = await env.DB.prepare('SELECT id, role FROM users WHERE id = ?').bind(targetId).first();
+  if (!target) throw new HttpError('User not found', 404);
+  const permissions = await getEffectivePermissions(env, { id: targetId, role: target.role });
+  return json({ role: target.role, permissions });
+}
+
+async function handleSetUserPermissions({ match, request, env, user }) {
+  requireAdmin(user);
+  const targetId = Number(match[1]);
+  const target = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetId).first();
+  if (!target) throw new HttpError('User not found', 404);
+  const body = await request.json().catch(() => ({}));
+  const permissions = body.permissions || {};
+  for (const section of SECTIONS) {
+    const p = permissions[section] || {};
+    await env.DB.prepare(
+      `INSERT INTO user_permissions (user_id, section, can_read, can_write) VALUES (?,?,?,?)
+       ON CONFLICT(user_id, section) DO UPDATE SET can_read = excluded.can_read, can_write = excluded.can_write`
+    ).bind(targetId, section, p.read ? 1 : 0, p.write ? 1 : 0).run();
+  }
+  return json({ ok: true });
 }
 
 async function handleCreateUser({ request, env, user }) {
@@ -441,8 +518,8 @@ async function handleListContent({ match, url, env }) {
 }
 
 async function handleCreateContent({ match, request, env, user }) {
-  requireUser(user);
   const table = match[1];
+  await requireSection(env, user, table, 'write');
   const body = await request.json().catch(() => ({}));
   const fields = CONTENT_FIELDS[table];
   const cols = [...fields, 'uploaded_by'];
@@ -455,8 +532,8 @@ async function handleCreateContent({ match, request, env, user }) {
 }
 
 async function handleUpdateContent({ match, request, env, user }) {
-  requireUser(user);
   const table = match[1];
+  await requireSection(env, user, table, 'write');
   const id = match[2];
   const body = await request.json().catch(() => ({}));
   const fields = CONTENT_FIELDS[table];
@@ -468,8 +545,8 @@ async function handleUpdateContent({ match, request, env, user }) {
 }
 
 async function handleDeleteContent({ match, env, user }) {
-  requireUser(user);
   const table = match[1];
+  await requireSection(env, user, table, 'write');
   const id = match[2];
   await env.DB.prepare(`UPDATE ${table} SET deleted_at = datetime('now') WHERE id = ?`).bind(id).run();
   return json({ ok: true });
@@ -495,7 +572,7 @@ async function handleGetSettings({ env }) {
 }
 
 async function handleUpdateSettings({ request, env, user }) {
-  requireUser(user);
+  await requireSection(env, user, 'settings', 'write');
   const body = await request.json().catch(() => ({}));
   const entries = Object.entries(body.settings || {});
   for (const [key, value] of entries) {
@@ -542,7 +619,7 @@ async function handleDafEntries({ env }) {
 
 // Bulk upsert from an admin-parsed Excel sheet: [{date: 'YYYY-MM-DD', text}, ...]
 async function handleDafBulkUpsert({ request, env, user }) {
-  requireUser(user);
+  await requireSection(env, user, 'daf', 'write');
   const body = await request.json().catch(() => ({}));
   const entries = Array.isArray(body.entries) ? body.entries : [];
   for (const e of entries) {
@@ -553,6 +630,109 @@ async function handleDafBulkUpsert({ request, env, user }) {
     ).bind(e.date, e.text || '').run();
   }
   return json({ ok: true, count: entries.length });
+}
+
+// ── HANDLERS: Zmanim (via Hebcal.com's public zmanim API) ───────────
+// Hebcal computes zmanim server-side and freely allows this kind of use
+// with attribution (the frontend shows a small "Zmanim via Hebcal.com"
+// credit). Proxied through the Worker rather than called directly from
+// the browser so a bad/slow Hebcal response can never surface as a CORS
+// error, and so repeat requests for the same day+location are cached at
+// Cloudflare's edge instead of hitting Hebcal every page load.
+async function handleHebcalZmanim({ url, ctx }) {
+  const lat = url.searchParams.get('lat');
+  const lon = url.searchParams.get('lon');
+  const date = url.searchParams.get('date');
+  if (!lat || !lon || !date) throw new HttpError('Missing lat, lon, or date', 400);
+  if (!/^-?\d+(\.\d+)?$/.test(lat) || !/^-?\d+(\.\d+)?$/.test(lon) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new HttpError('Invalid lat, lon, or date', 400);
+  }
+
+  const cache = caches.default;
+  const cacheKey = new Request(`https://cache.internal/hebcal-zmanim?lat=${lat}&lon=${lon}&date=${date}`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const hebcalUrl = `https://www.hebcal.com/zmanim?cfg=json&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&date=${encodeURIComponent(date)}`;
+  const upstream = await fetch(hebcalUrl, { headers: { 'User-Agent': 'MoisdesVienPlatform/1.0 (+https://moisdesvien.com)' } });
+  if (!upstream.ok) throw new HttpError('Hebcal zmanim lookup failed', 502);
+  const data = await upstream.json().catch(() => null);
+  if (!data || !data.times) throw new HttpError('Hebcal returned an unexpected response', 502);
+
+  const response = new Response(JSON.stringify({ times: data.times }), {
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=21600' },
+  });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+}
+
+// Single Gregorian date -> Hebrew date, via Hebcal's date converter.
+// hebrew is already Hebrew-script formatted (e.g. "ט״ז באב תשפ״ו"), which
+// is what every "today's date" display on the site wants directly.
+async function handleHebcalDate({ url, ctx }) {
+  const date = url.searchParams.get('date');
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError('Missing or invalid date', 400);
+  const [gy, gm, gd] = date.split('-').map(Number);
+
+  const cache = caches.default;
+  const cacheKey = new Request(`https://cache.internal/hebcal-date?date=${date}`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const hebcalUrl = `https://www.hebcal.com/converter?cfg=json&gy=${gy}&gm=${gm}&gd=${gd}&g2h=1`;
+  const upstream = await fetch(hebcalUrl, { headers: { 'User-Agent': 'MoisdesVienPlatform/1.0 (+https://moisdesvien.com)' } });
+  if (!upstream.ok) throw new HttpError('Hebcal date lookup failed', 502);
+  const data = await upstream.json().catch(() => null);
+  if (!data || !data.hebrew) throw new HttpError('Hebcal returned an unexpected response', 502);
+
+  const response = new Response(JSON.stringify({ hy: data.hy, hm: data.hm, hd: data.hd, hebrew: data.hebrew, events: data.events || [] }), {
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=86400' },
+  });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+}
+
+// Date-range calendar (parsha, major/minor holidays, Rosh Chodesh) via
+// Hebcal's main calendar API — one call per visible month instead of one
+// per day, since this returns every notable day in the range at once.
+// Location is passed through (candle-lighting/havdalah) when available;
+// this community's timezone is hardcoded the same way gcal-events already
+// assumes it (America/New_York) since Hebcal has no way to infer it from
+// lat/lon alone.
+async function handleHebcalCalendar({ url, ctx }) {
+  const start = url.searchParams.get('start');
+  const end = url.searchParams.get('end');
+  const lat = url.searchParams.get('lat');
+  const lon = url.searchParams.get('lon');
+  if (!start || !end || !/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    throw new HttpError('Missing or invalid start/end', 400);
+  }
+
+  const cache = caches.default;
+  const cacheKey = new Request(`https://cache.internal/hebcal-calendar?start=${start}&end=${end}&lat=${lat || ''}&lon=${lon || ''}`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const params = new URLSearchParams({ v: '1', cfg: 'json', start, end, maj: 'on', min: 'on', nx: 'on', s: 'on' });
+  if (lat && lon && /^-?\d+(\.\d+)?$/.test(lat) && /^-?\d+(\.\d+)?$/.test(lon)) {
+    params.set('c', 'on');
+    params.set('latitude', lat);
+    params.set('longitude', lon);
+    params.set('tzid', 'America/New_York');
+  } else {
+    params.set('geo', 'none');
+  }
+  const hebcalUrl = `https://www.hebcal.com/hebcal?${params.toString()}`;
+  const upstream = await fetch(hebcalUrl, { headers: { 'User-Agent': 'MoisdesVienPlatform/1.0 (+https://moisdesvien.com)' } });
+  if (!upstream.ok) throw new HttpError('Hebcal calendar lookup failed', 502);
+  const data = await upstream.json().catch(() => null);
+  if (!data || !Array.isArray(data.items)) throw new HttpError('Hebcal returned an unexpected response', 502);
+
+  const response = new Response(JSON.stringify({ items: data.items }), {
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=21600' },
+  });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
 }
 
 // ── HANDLERS: Google Calendar sync ──────────────────────────────────
@@ -895,13 +1075,13 @@ function csvEscape(v) {
 }
 
 async function handleListForms({ env, user }) {
-  requireUser(user);
+  await requireSection(env, user, 'forms', 'read');
   const { results } = await env.DB.prepare('SELECT * FROM forms WHERE deleted_at IS NULL ORDER BY id DESC').all();
   return json({ forms: results.map((f) => ({ ...f, settings: safeParse(f.settings, {}) })) });
 }
 
 async function handleCreateForm({ request, env, user }) {
-  requireUser(user);
+  await requireSection(env, user, 'forms', 'write');
   const body = await request.json().catch(() => ({}));
   let slug = String(body.slug || '').trim();
   if (!slug || !/^[a-z0-9-]+$/i.test(slug)) slug = base36Slug();
@@ -922,7 +1102,7 @@ async function handleCreateForm({ request, env, user }) {
 }
 
 async function handleUpdateForm({ match, request, env, user }) {
-  requireUser(user);
+  await requireSection(env, user, 'forms', 'write');
   const id = match[1];
   const body = await request.json().catch(() => ({}));
   const settings = JSON.stringify(body.settings || {});
@@ -948,7 +1128,7 @@ async function handleUpdateForm({ match, request, env, user }) {
 }
 
 async function handleDeleteForm({ match, env, user }) {
-  requireUser(user);
+  await requireSection(env, user, 'forms', 'write');
   await env.DB.prepare("UPDATE forms SET deleted_at = datetime('now') WHERE id = ?").bind(match[1]).run();
   return json({ ok: true });
 }
@@ -987,7 +1167,7 @@ async function handleFormSubmit({ match, request, env }) {
 }
 
 async function handleListFields({ match, env, user }) {
-  requireUser(user);
+  await requireSection(env, user, 'forms', 'read');
   const { results } = await env.DB.prepare(
     'SELECT * FROM form_fields WHERE form_id = ? ORDER BY field_order'
   ).bind(match[1]).all();
@@ -995,7 +1175,7 @@ async function handleListFields({ match, env, user }) {
 }
 
 async function handleSaveFields({ match, request, env, user }) {
-  requireUser(user);
+  await requireSection(env, user, 'forms', 'write');
   const formId = match[1];
   const body = await request.json().catch(() => ({}));
   const fields = Array.isArray(body.fields) ? body.fields : [];
@@ -1013,7 +1193,7 @@ async function handleSaveFields({ match, request, env, user }) {
 }
 
 async function handleFormResponses({ match, url, env, user }) {
-  requireUser(user);
+  await requireSection(env, user, 'forms', 'read');
   const formId = match[1];
   const { results: fields } = await env.DB.prepare(
     'SELECT * FROM form_fields WHERE form_id = ? ORDER BY field_order'
@@ -1052,6 +1232,8 @@ const routes = [
   ['POST', /^\/api\/refresh$/, handleRefresh],
   ['GET', /^\/api\/users$/, handleListUsers],
   ['POST', /^\/api\/users$/, handleCreateUser],
+  ['GET', /^\/api\/users\/(\d+)\/permissions$/, handleGetUserPermissions],
+  ['PUT', /^\/api\/users\/(\d+)\/permissions$/, handleSetUserPermissions],
   ['GET', /^\/api\/tags$/, handleTags],
   ['GET', /^\/api\/categories$/, handleCategories],
   ['GET', /^\/api\/r2-list$/, handleR2List],
@@ -1077,6 +1259,9 @@ const routes = [
   ['POST', /^\/api\/(posts|posters|events|videos|pdfs|simchas)$/, handleCreateContent],
   ['PUT', /^\/api\/(posts|posters|events|videos|pdfs|simchas)\/(\d+)$/, handleUpdateContent],
   ['DELETE', /^\/api\/(posts|posters|events|videos|pdfs|simchas)\/(\d+)$/, handleDeleteContent],
+  ['GET', /^\/api\/hebcal-zmanim$/, handleHebcalZmanim],
+  ['GET', /^\/api\/hebcal-date$/, handleHebcalDate],
+  ['GET', /^\/api\/hebcal-calendar$/, handleHebcalCalendar],
   ['GET', /^\/api\/daf-entries$/, handleDafEntries],
   ['POST', /^\/api\/daf-entries\/bulk$/, handleDafBulkUpsert],
   ['GET', /^\/api\/gcal-events$/, handleGcalEvents],
