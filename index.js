@@ -1050,8 +1050,8 @@ async function handleMultipartAbort({ request, env, user }) {
 // The key is always server-constructed under form-uploads/<slug>/ so a
 // public submitter can never target any other prefix in the bucket.
 async function handleFormPresign({ match, request, env }) {
-  const slug = match[1];
-  const form = await env.DB.prepare('SELECT id FROM forms WHERE slug = ? AND deleted_at IS NULL').bind(slug).first();
+  const slug = normalizeSlug(match[1]);
+  const form = await findFormBySlug(env, slug);
   if (!form) throw new HttpError('Form not found', 404);
 
   const body = await request.json().catch(() => ({}));
@@ -1065,13 +1065,24 @@ async function handleFormPresign({ match, request, env }) {
 }
 
 // ── HANDLERS: forms ───────────────────────────────────────────────────
+// Public surface is exactly 3 read-only-safe, unauthenticated endpoints:
+// GET .../public (form + fields), POST .../submit (one response), POST
+// .../presign (a file field's upload URL). Everything else is admin-only.
 
-function base36Slug() {
-  return 'form-' + Date.now().toString(36);
+const SLUG_RE = /^[a-z0-9-]+$/;
+
+function randomSlug() {
+  // Never depends on Date.now() alone — two forms created in the same
+  // millisecond (e.g. a double-click) must never collide.
+  return 'form-' + crypto.randomUUID().slice(0, 8);
+}
+function normalizeSlug(raw) {
+  return String(raw || '').trim().toLowerCase();
 }
 function safeParse(s, fallback) {
   try {
-    return JSON.parse(s);
+    const v = JSON.parse(s);
+    return v ?? fallback;
   } catch (e) {
     return fallback;
   }
@@ -1080,29 +1091,44 @@ function csvEscape(v) {
   const s = String(v ?? '');
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
+function serializeForm(row) {
+  return { ...row, settings: safeParse(row.settings, {}) };
+}
+function serializeField(row) {
+  return { ...row, options: safeParse(row.options, []) };
+}
+
+async function findFormBySlug(env, slug) {
+  return env.DB.prepare('SELECT * FROM forms WHERE slug = ? AND deleted_at IS NULL').bind(slug).first();
+}
 
 async function handleListForms({ env, user }) {
   await requireSection(env, user, 'forms', 'read');
   const { results } = await env.DB.prepare('SELECT * FROM forms WHERE deleted_at IS NULL ORDER BY id DESC').all();
-  return json({ forms: results.map((f) => ({ ...f, settings: safeParse(f.settings, {}) })) });
+  return json({ forms: results.map(serializeForm) });
 }
 
 async function handleCreateForm({ request, env, user }) {
   await requireSection(env, user, 'forms', 'write');
   const body = await request.json().catch(() => ({}));
-  let slug = String(body.slug || '').trim();
-  if (!slug || !/^[a-z0-9-]+$/i.test(slug)) slug = base36Slug();
+  const title = String(body.title || '').trim();
   const settings = JSON.stringify(body.settings || {});
 
-  const insert = async (s) =>
+  const requestedSlug = normalizeSlug(body.slug);
+  let slug = requestedSlug && SLUG_RE.test(requestedSlug) ? requestedSlug : randomSlug();
+
+  const insert = (s) =>
     env.DB.prepare('INSERT INTO forms (title,slug,settings,created_by) VALUES (?,?,?,?)')
-      .bind(String(body.title || ''), s, settings, user.id).run();
+      .bind(title, s, settings, user.id).run();
 
   try {
     const res = await insert(slug);
     return json({ ok: true, id: res.meta.last_row_id, slug });
   } catch (e) {
-    slug = base36Slug();
+    // Slug collision (or any other insert failure) — fall back to a
+    // guaranteed-unique generated one rather than failing the whole
+    // create, since "new form" is meant to always succeed instantly.
+    slug = randomSlug();
     const res = await insert(slug);
     return json({ ok: true, id: res.meta.last_row_id, slug });
   }
@@ -1110,19 +1136,19 @@ async function handleCreateForm({ request, env, user }) {
 
 async function handleUpdateForm({ match, request, env, user }) {
   await requireSection(env, user, 'forms', 'write');
-  const id = match[1];
+  const numericId = Number(match[1]);
   const body = await request.json().catch(() => ({}));
+  const title = String(body.title || '').trim();
   const settings = JSON.stringify(body.settings || {});
 
   if (body.slug !== undefined) {
-    const slug = String(body.slug || '').trim().toLowerCase();
-    if (!/^[a-z0-9-]+$/.test(slug)) throw new HttpError('Slug may only contain lowercase letters, numbers, and hyphens', 400);
-    const numericId = Number(id);
+    const slug = normalizeSlug(body.slug);
+    if (!SLUG_RE.test(slug)) throw new HttpError('Slug may only contain lowercase letters, numbers, and hyphens', 400);
     const clash = await env.DB.prepare('SELECT id FROM forms WHERE slug = ? AND id != ? AND deleted_at IS NULL').bind(slug, numericId).first();
     if (clash) throw new HttpError('That slug is already taken by another form', 409);
     try {
       await env.DB.prepare('UPDATE forms SET title = ?, slug = ?, settings = ? WHERE id = ?')
-        .bind(String(body.title || ''), slug, settings, numericId).run();
+        .bind(title, slug, settings, numericId).run();
     } catch (e) {
       throw new HttpError('That slug is already taken by another form', 409);
     }
@@ -1130,70 +1156,90 @@ async function handleUpdateForm({ match, request, env, user }) {
   }
 
   await env.DB.prepare('UPDATE forms SET title = ?, settings = ? WHERE id = ?')
-    .bind(String(body.title || ''), settings, id).run();
+    .bind(title, settings, numericId).run();
   return json({ ok: true });
 }
 
 async function handleDeleteForm({ match, env, user }) {
   await requireSection(env, user, 'forms', 'write');
-  await env.DB.prepare("UPDATE forms SET deleted_at = datetime('now') WHERE id = ?").bind(match[1]).run();
+  await env.DB.prepare("UPDATE forms SET deleted_at = datetime('now') WHERE id = ?").bind(Number(match[1])).run();
   return json({ ok: true });
 }
 
+// ── Public (unauthenticated) ─────────────────────────────────────────
+
 async function handleFormPublic({ match, env }) {
-  const slug = match[1];
-  const form = await env.DB.prepare('SELECT * FROM forms WHERE slug = ? AND deleted_at IS NULL').bind(slug).first();
+  const slug = normalizeSlug(match[1]);
+  const form = await findFormBySlug(env, slug);
   if (!form) throw new HttpError('Form not found', 404);
   const { results: fields } = await env.DB.prepare(
     'SELECT * FROM form_fields WHERE form_id = ? ORDER BY field_order'
   ).bind(form.id).all();
-  return json({
-    form: { ...form, settings: safeParse(form.settings, {}) },
-    fields: fields.map((f) => ({ ...f, options: safeParse(f.options, []) })),
-  });
+  return json({ form: serializeForm(form), fields: fields.map(serializeField) });
 }
 
 async function handleFormSubmit({ match, request, env }) {
-  const slug = match[1];
-  const form = await env.DB.prepare('SELECT * FROM forms WHERE slug = ? AND deleted_at IS NULL').bind(slug).first();
+  const slug = normalizeSlug(match[1]);
+  const form = await findFormBySlug(env, slug);
   if (!form) throw new HttpError('Form not found', 404);
   const settings = safeParse(form.settings, {});
   if (settings.status === 'closed') throw new HttpError('This form is closed', 403);
 
+  const { results: validFields } = await env.DB.prepare('SELECT id FROM form_fields WHERE form_id = ?').bind(form.id).all();
+  const validIds = new Set(validFields.map((f) => String(f.id)));
+
   const body = await request.json().catch(() => ({}));
-  const answers = body.answers || {};
+  const answers = body.answers && typeof body.answers === 'object' ? body.answers : {};
+
   const res = await env.DB.prepare('INSERT INTO form_responses (form_id, metadata) VALUES (?,?)')
     .bind(form.id, JSON.stringify(body.metadata || {})).run();
   const responseId = res.meta.last_row_id;
 
   for (const [fieldId, value] of Object.entries(answers)) {
+    // Ignore any answer keyed to a field that isn't actually part of this
+    // form — a stale/tampered client payload shouldn't be able to write
+    // arbitrary field_id rows.
+    if (!validIds.has(String(fieldId))) continue;
+    const stored = typeof value === 'string' ? value : JSON.stringify(value ?? '');
     await env.DB.prepare('INSERT INTO form_answers (response_id, field_id, value) VALUES (?,?,?)')
-      .bind(responseId, fieldId, typeof value === 'string' ? value : JSON.stringify(value)).run();
+      .bind(responseId, Number(fieldId), stored).run();
   }
   return json({ ok: true });
 }
+
+// ── Fields ─────────────────────────────────────────────────────────
 
 async function handleListFields({ match, env, user }) {
   await requireSection(env, user, 'forms', 'read');
   const { results } = await env.DB.prepare(
     'SELECT * FROM form_fields WHERE form_id = ? ORDER BY field_order'
-  ).bind(match[1]).all();
-  return json({ fields: results.map((f) => ({ ...f, options: safeParse(f.options, []) })) });
+  ).bind(Number(match[1])).all();
+  return json({ fields: results.map(serializeField) });
 }
 
 async function handleSaveFields({ match, request, env, user }) {
   await requireSection(env, user, 'forms', 'write');
-  const formId = match[1];
+  const formId = Number(match[1]);
   const body = await request.json().catch(() => ({}));
   const fields = Array.isArray(body.fields) ? body.fields : [];
+
+  // Replace-all: simplest correct semantics for a drag-reordered field
+  // list edited as a whole in the builder, and D1 has no multi-statement
+  // transaction API to make a smarter diff meaningfully safer anyway.
   await env.DB.prepare('DELETE FROM form_fields WHERE form_id = ?').bind(formId).run();
   let order = 0;
   for (const f of fields) {
     await env.DB.prepare(
       'INSERT INTO form_fields (form_id,type,label,placeholder,options,required,field_order,settings) VALUES (?,?,?,?,?,?,?,?)'
     ).bind(
-      formId, f.type || 'text', f.label || '', f.placeholder || '',
-      JSON.stringify(f.options || []), f.required ? 1 : 0, order++, JSON.stringify(f.settings || {})
+      formId,
+      String(f.type || 'text'),
+      String(f.label || ''),
+      String(f.placeholder || ''),
+      JSON.stringify(Array.isArray(f.options) ? f.options : []),
+      f.required ? 1 : 0,
+      order++,
+      JSON.stringify(f.settings || {})
     ).run();
   }
   return json({ ok: true });
