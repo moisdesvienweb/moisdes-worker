@@ -248,8 +248,10 @@ async function ensureFormsTables(env) {
 
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS form_responses (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    form_id INTEGER, submitted_at TEXT DEFAULT (datetime('now')), metadata TEXT
+    form_id INTEGER, submitted_at TEXT DEFAULT (datetime('now')), metadata TEXT, read_at TEXT
   )`).run();
+  // A pre-existing DB won't have read_at from before this feature existed.
+  try { await env.DB.prepare('ALTER TABLE form_responses ADD COLUMN read_at TEXT').run(); } catch (e) { /* column already exists */ }
 
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS form_answers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -464,6 +466,23 @@ async function handleSetUserPermissions({ match, request, env, user }) {
   return json({ ok: true });
 }
 
+async function handleSetUserPassword({ match, request, env, user }) {
+  requireAdmin(user);
+  const targetId = Number(match[1]);
+  const target = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetId).first();
+  if (!target) throw new HttpError('User not found', 404);
+  const body = await request.json().catch(() => ({}));
+  const password = String(body.password || '');
+  if (password.length < 6) throw new HttpError('Password must be at least 6 characters', 400);
+  const hash = await hashPassword(password);
+  await env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(hash, targetId).run();
+  // Any existing sessions were signed against this account before the
+  // password changed — drop them so a password reset actually locks out
+  // whoever had the old one, instead of leaving old sessions valid.
+  await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(targetId).run();
+  return json({ ok: true });
+}
+
 async function handleCreateUser({ request, env, user }) {
   requireAdmin(user);
   const body = await request.json().catch(() => ({}));
@@ -499,12 +518,31 @@ async function saveNewTaxonomy(body, env) {
 
 const ORDER_COLUMN = { simchas: 'date_added' };
 
-async function handleListContent({ match, url, env }) {
+async function handleListContent({ match, url, env, user }) {
   const table = match[1];
   const orderCol = ORDER_COLUMN[table] || 'date';
   const { results } = await env.DB.prepare(
     `SELECT * FROM ${table} WHERE deleted_at IS NULL ORDER BY ${orderCol} DESC, id DESC`
   ).all();
+
+  // Who uploaded each item is admin-only info — attach it only for an
+  // authenticated request that actually has read access to this section.
+  // This same endpoint also serves the public site's pages (unauthenticated,
+  // no `user`), which must never see it — so the attribution is fetched
+  // and merged in only inside this gated branch, never unconditionally.
+  if (user) {
+    try {
+      await requireSection(env, user, table, 'read');
+      const ids = [...new Set(results.map((r) => r.uploaded_by).filter(Boolean))];
+      if (ids.length) {
+        const { results: uploaders } = await env.DB.prepare(
+          `SELECT id, name FROM users WHERE id IN (${ids.map(() => '?').join(',')})`
+        ).bind(...ids).all();
+        const nameById = Object.fromEntries(uploaders.map((u) => [u.id, u.name]));
+        for (const r of results) r.uploaded_by_name = nameById[r.uploaded_by] || null;
+      }
+    } catch (e) { /* not authorized for this section — no attribution attached */ }
+  }
 
   if (url.searchParams.get('format') === 'csv') {
     const cols = ['id', ...CONTENT_FIELDS[table]];
@@ -1104,7 +1142,12 @@ async function findFormBySlug(env, slug) {
 
 async function handleListForms({ env, user }) {
   await requireSection(env, user, 'forms', 'read');
-  const { results } = await env.DB.prepare('SELECT * FROM forms WHERE deleted_at IS NULL ORDER BY id DESC').all();
+  const { results } = await env.DB.prepare(
+    `SELECT f.*, (
+       SELECT COUNT(*) FROM form_responses r WHERE r.form_id = f.id AND r.read_at IS NULL
+     ) AS unread_count
+     FROM forms f WHERE f.deleted_at IS NULL ORDER BY f.id DESC`
+  ).all();
   return json({ forms: results.map(serializeForm) });
 }
 
@@ -1260,7 +1303,7 @@ async function handleFormResponses({ match, url, env, user }) {
 
   const byResponse = {};
   for (const a of answers) (byResponse[a.response_id] ||= {})[a.field_id] = a.value;
-  const rows = responses.map((r) => ({ id: r.id, submitted_at: r.submitted_at, answers: byResponse[r.id] || {} }));
+  const rows = responses.map((r) => ({ id: r.id, submitted_at: r.submitted_at, read_at: r.read_at, answers: byResponse[r.id] || {} }));
 
   if (url.searchParams.get('format') === 'csv') {
     const header = ['id', 'submitted_at', ...fields.map((f) => f.label)];
@@ -1275,6 +1318,18 @@ async function handleFormResponses({ match, url, env, user }) {
   return json({ fields, responses: rows });
 }
 
+async function handleMarkResponseRead({ match, request, env, user }) {
+  await requireSection(env, user, 'forms', 'write');
+  const formId = Number(match[1]);
+  const responseId = Number(match[2]);
+  const body = await request.json().catch(() => ({}));
+  const read = body.read !== false; // default true — "mark as read" is the common case
+  await env.DB.prepare(
+    "UPDATE form_responses SET read_at = ? WHERE id = ? AND form_id = ?"
+  ).bind(read ? new Date().toISOString() : null, responseId, formId).run();
+  return json({ ok: true });
+}
+
 // ── ROUTER ────────────────────────────────────────────────────────────
 
 const routes = [
@@ -1287,6 +1342,7 @@ const routes = [
   ['POST', /^\/api\/users$/, handleCreateUser],
   ['GET', /^\/api\/users\/(\d+)\/permissions$/, handleGetUserPermissions],
   ['PUT', /^\/api\/users\/(\d+)\/permissions$/, handleSetUserPermissions],
+  ['PUT', /^\/api\/users\/(\d+)\/password$/, handleSetUserPassword],
   ['GET', /^\/api\/tags$/, handleTags],
   ['GET', /^\/api\/categories$/, handleCategories],
   ['GET', /^\/api\/r2-list$/, handleR2List],
@@ -1306,6 +1362,7 @@ const routes = [
   ['GET', /^\/api\/forms\/(\d+)\/fields$/, handleListFields],
   ['POST', /^\/api\/forms\/(\d+)\/fields$/, handleSaveFields],
   ['GET', /^\/api\/forms\/(\d+)\/responses$/, handleFormResponses],
+  ['PUT', /^\/api\/forms\/(\d+)\/responses\/(\d+)\/read$/, handleMarkResponseRead],
   ['PUT', /^\/api\/forms\/(\d+)$/, handleUpdateForm],
   ['DELETE', /^\/api\/forms\/(\d+)$/, handleDeleteForm],
   ['GET', /^\/api\/(posts|posters|events|videos|pdfs|simchas)$/, handleListContent],
