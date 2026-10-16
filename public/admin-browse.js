@@ -16,6 +16,7 @@ window.MOISDES.adminBrowse = (function () {
     events: [['date', 'Date'], ['title', 'Title'], ['location', 'Location'], ['category', 'Category']],
     videos: [['date', 'Date'], ['title', 'Title'], ['location', 'Location'], ['category', 'Category']],
     pdfs: [['date', 'Date'], ['title', 'Title'], ['category', 'Category'], ['language', 'Language'], ['parsha', 'Parsha'], ['year', 'Year']],
+    simchas: [['date_added', 'Date added'], ['text', 'Text']],
   };
 
   let currentType = 'posts';
@@ -28,28 +29,53 @@ window.MOISDES.adminBrowse = (function () {
     try { return hebrew.isoToHebrewString(iso); } catch (e) { return iso; }
   }
 
+  // Admin/superadmin always have full access; an 'editor' is gated by
+  // whatever was granted for this section in the Users panel. This only
+  // controls what's shown here — the Worker enforces the real boundary.
+  function canWrite(type) {
+    const role = api.getUser()?.role;
+    if (role === 'admin' || role === 'superadmin') return true;
+    return !!api.getPermissions()?.[type]?.write;
+  }
+
   function render() {
     const cols = COLUMNS[currentType];
-    thead.innerHTML = `<tr>${cols.map(([, label]) => `<th>${label}</th>`).join('')}<th>Actions</th></tr>`;
+    // "Uploaded by" isn't a real content field — it's admin-only
+    // attribution the Worker attaches server-side (only for an
+    // authenticated request with read access), so it's appended here
+    // rather than listed per-type in COLUMNS above.
+    thead.innerHTML = `<tr>${cols.map(([, label]) => `<th>${label}</th>`).join('')}<th>Uploaded by</th><th>Actions</th></tr>`;
 
     const q = (filterInput.value || '').toLowerCase().trim();
+    const writable = canWrite(currentType);
     tbody.innerHTML = '';
     currentRows
       .filter((row) => !q || cols.some(([key]) => String(row[key] || '').toLowerCase().includes(q)))
       .forEach((row) => {
         const tr = document.createElement('tr');
-        tr.innerHTML = cols.map(([key]) => `<td class="wrap">${key === 'date' ? fmtDate(row[key]) : escapeHtml(row[key] || '')}</td>`).join('');
+        tr.innerHTML = cols.map(([key]) => `<td class="wrap">${key === 'date' ? fmtDate(row[key]) : escapeHtml(row[key] || '')}</td>`).join('') +
+          `<td class="wrap">${escapeHtml(row.uploaded_by_name || '—')}</td>`;
         const actionsTd = document.createElement('td');
-        const editBtn = document.createElement('button');
-        editBtn.className = 'btn btn-sm';
-        editBtn.textContent = 'Edit';
-        editBtn.addEventListener('click', () => openEdit(row));
-        const delBtn = document.createElement('button');
-        delBtn.className = 'btn btn-sm btn-danger';
-        delBtn.textContent = 'Delete';
-        delBtn.addEventListener('click', () => remove(row));
-        actionsTd.appendChild(editBtn);
-        actionsTd.appendChild(delBtn);
+        if (writable) {
+          const editBtn = document.createElement('button');
+          editBtn.className = 'btn btn-sm';
+          editBtn.textContent = 'Edit';
+          editBtn.addEventListener('click', () => openEdit(row));
+          const dupBtn = document.createElement('button');
+          dupBtn.className = 'btn btn-sm';
+          dupBtn.textContent = 'Duplicate';
+          dupBtn.addEventListener('click', () => openDuplicate(row));
+          const delBtn = document.createElement('button');
+          delBtn.className = 'btn btn-sm btn-danger';
+          delBtn.textContent = 'Delete';
+          delBtn.addEventListener('click', () => remove(row));
+          actionsTd.appendChild(editBtn);
+          actionsTd.appendChild(dupBtn);
+          actionsTd.appendChild(delBtn);
+        } else {
+          actionsTd.className = 'state-msg';
+          actionsTd.textContent = 'View only';
+        }
         tr.appendChild(actionsTd);
         tbody.appendChild(tr);
       });
@@ -75,6 +101,18 @@ window.MOISDES.adminBrowse = (function () {
     modalTitle.textContent = `Edit ${currentType.slice(0, 1).toUpperCase() + currentType.slice(1)}`;
     upload.buildForm(currentType, modalBody, {
       existing: row,
+      onSaved: () => { closeModal(); load(currentType); },
+    });
+    modalOverlay.classList.add('open');
+  }
+
+  // Opens a fresh Publish form pre-filled with this row's text/metadata
+  // (title, description, tags, etc.) but no files — edit anything, then
+  // Publish creates a brand new item, leaving the original untouched.
+  function openDuplicate(row) {
+    modalTitle.textContent = `Duplicate ${currentType.slice(0, 1).toUpperCase() + currentType.slice(1)}`;
+    upload.buildForm(currentType, modalBody, {
+      prefill: row,
       onSaved: () => { closeModal(); load(currentType); },
     });
     modalOverlay.classList.add('open');

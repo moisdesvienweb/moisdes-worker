@@ -25,7 +25,7 @@
     const a = document.createElement('a');
     a.className = 'tag-pill';
     a.textContent = tag;
-    a.href = `/video?tag=${encodeURIComponent(tag)}`;
+    a.href = `/search/?tag=${encodeURIComponent(tag)}`;
     return a;
   }
 
@@ -45,24 +45,32 @@
     }
     const sorted = [...filtered].sort((a, b) => util.dateDesc(a.date, b.date));
     grid.innerHTML = '';
-    grid.style.gridTemplateColumns = '1fr';
+    grid.classList.add('video-grid');
 
     for (const v of sorted) {
       const ytId = util.youtubeId(v.video_url);
-      const card = document.createElement('div');
-      card.className = 'card';
+      // Listing page never embeds a player (no YouTube branding here at
+      // all) — just a thumbnail with a play badge, linking to the
+      // detail page where the actual video (with whatever branding it
+      // carries) plays.
+      let thumbUrl = null;
+      if (ytId) thumbUrl = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+      else if (v.folder_url) thumbUrl = await api.firstImageUrl(v.folder_url);
+
+      const card = document.createElement('a');
+      card.className = 'card video-card-item';
       card.id = `video-${v.id}`;
-      card.style.padding = '1.25rem 1.4rem';
+      card.href = `/video/post.html?id=${v.id}`;
       card.innerHTML = `
-        ${ytId ? `<div class="video-embed"><iframe src="https://www.youtube.com/embed/${ytId}" allowfullscreen loading="lazy"></iframe></div>` : ''}
-        <div class="event-meta">${hebrew.isoToHebrewString(v.date)}${v.location ? ' · ' + util.eh(v.location) : ''}${v.category ? ' · ' + util.eh(v.category) : ''}</div>
-        <h2 class="video-title">${util.eh(v.title)}</h2>
-        <div class="event-desc">${util.eh(v.description || '')}</div>
-        <div class="event-tags"></div>
+        <div class="card-media video-thumb">
+          ${thumbUrl ? `<img src="${util.eh(thumbUrl)}" alt="">` : ''}
+          <span class="video-play-badge">&#9658;</span>
+        </div>
+        <div class="card-body">
+          <div class="card-date">${hebrew.isoToHebrewString(v.date)}${v.location ? ' · ' + util.eh(v.location) : ''}${v.category ? ' · ' + util.eh(v.category) : ''}</div>
+          <div class="card-title">${util.eh(v.title)}</div>
+        </div>
       `;
-      const tagsEl = card.querySelector('.event-tags');
-      (v.tags || '').split(',').map((t) => t.trim()).filter(Boolean).forEach((t) => tagsEl.appendChild(tagPill(t)));
-      if (!tagsEl.children.length) tagsEl.remove();
       grid.appendChild(card);
     }
 

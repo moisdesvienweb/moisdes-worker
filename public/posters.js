@@ -76,7 +76,7 @@
           const gallery = keys.map((k) => api.r2Url(k));
 
           const item = document.createElement('div');
-          item.className = 'poster-item stack';
+          item.className = 'poster-item poster-grid';
           item.id = `poster-${poster.id}`;
           gallery.forEach((url, i) => {
             const img = document.createElement('img');

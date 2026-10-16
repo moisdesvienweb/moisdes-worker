@@ -1,6 +1,8 @@
 // ================================================================
 // MOISDES — EVENTS PAGE
-// events.js
+// events.js — compact cards in the grid; each links to its own detail
+// page (/events/post.html?id=) instead of opening a popup, so every
+// event (and its audio playlist) has a real, shareable URL.
 // ================================================================
 
 (async function () {
@@ -13,15 +15,17 @@
   const params = new URLSearchParams(location.search);
   const activeTag = params.get('tag');
 
-  const AUDIO_EXT = ['mp3', 'wav', 'ogg', 'm4a'];
-  function isAudio(key) { return AUDIO_EXT.includes(key.split('.').pop().toLowerCase()); }
+  function excerpt(html, len) {
+    const text = String(html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    return text.length > len ? text.slice(0, len) + '…' : text;
+  }
 
-  function tagPill(tag) {
-    const a = document.createElement('a');
-    a.className = 'tag-pill';
-    a.textContent = tag;
-    a.href = `/events?tag=${encodeURIComponent(tag)}`;
-    return a;
+  // Old-style "#event-<id>" links (from before events got their own
+  // pages) redirect straight to the new detail URL instead of landing on
+  // a dead anchor.
+  if (location.hash && /^#event-\d+$/.test(location.hash)) {
+    location.replace(`/events/post.html?id=${location.hash.slice(7)}`);
+    return;
   }
 
   if (activeTag) {
@@ -42,52 +46,19 @@
     list.innerHTML = '';
 
     for (const ev of sorted) {
-      const keys = await api.listFolder(ev.folder_url).catch(() => []);
-      const audioKeys = keys.filter(isAudio);
-      const imageKeys = keys.filter((k) => !isAudio(k));
+      const coverUrl = ev.thumb_url ? api.r2Url(ev.thumb_url) : await api.firstImageUrl(ev.folder_url);
 
-      const card = document.createElement('article');
-      card.className = 'event-card';
-      card.id = `event-${ev.id}`;
+      const card = document.createElement('a');
+      card.href = `/events/post.html?id=${ev.id}`;
+      card.className = 'card';
       card.innerHTML = `
-        <div class="event-meta">${hebrew.isoToHebrewString(ev.date)}${ev.location ? ' · ' + util.eh(ev.location) : ''}${ev.category ? ' · ' + util.eh(ev.category) : ''}</div>
-        <h2 class="event-title">${util.eh(ev.title)}</h2>
-        <div class="event-desc">${util.eh(ev.description || '')}</div>
-      `;
-
-      for (const key of audioKeys) {
-        const audio = document.createElement('audio');
-        audio.controls = true;
-        audio.src = api.r2Url(key);
-        card.appendChild(audio);
-      }
-
-      if (imageKeys.length) {
-        const stack = document.createElement('div');
-        stack.className = 'stack';
-        stack.style.marginTop = '1rem';
-        imageKeys.forEach((key) => {
-          const img = document.createElement('img');
-          img.src = api.r2Url(key);
-          img.alt = '';
-          stack.appendChild(img);
-        });
-        card.appendChild(stack);
-      }
-
-      const tagsEl = document.createElement('div');
-      tagsEl.className = 'event-tags';
-      (ev.tags || '').split(',').map((t) => t.trim()).filter(Boolean).forEach((t) => {
-        tagsEl.appendChild(tagPill(t));
-      });
-      if (tagsEl.children.length) card.appendChild(tagsEl);
-
+        <div class="card-media">${coverUrl ? `<img src="${util.eh(coverUrl)}" alt="">` : ''}</div>
+        <div class="card-body">
+          <div class="card-date">${hebrew.isoToHebrewString(ev.date)}${ev.location ? ' · ' + util.eh(ev.location) : ''}</div>
+          <div class="card-title">${util.eh(ev.title)}</div>
+          <p class="card-excerpt">${util.eh(excerpt(ev.description, 90))}</p>
+        </div>`;
       list.appendChild(card);
-    }
-
-    if (location.hash) {
-      const target = document.querySelector(location.hash);
-      if (target) target.scrollIntoView();
     }
   } catch (e) {
     list.innerHTML = '<p class="state-msg">נישט געקענט לאדן</p>';

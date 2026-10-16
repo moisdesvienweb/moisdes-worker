@@ -17,6 +17,13 @@
 
 * , *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+/* Always reserve the vertical scrollbar's width, whether or not the page
+   is currently tall enough to need one — without this, a page that's
+   just barely too short to scroll (e.g. a 5-week calendar month) renders
+   a few pixels wider than one that scrolls (e.g. a 6-week month), since
+   the scrollbar itself eats into the content width only when present.
+   That's what made calendar day-cell widths shift between some months. */
+html { scrollbar-gutter: stable; }
 
 html {
   background: #2c1608;
@@ -54,6 +61,22 @@ p { margin: 0 0 1em; }
   margin-bottom: 2rem;
   padding-bottom: .75rem;
   border-bottom: 1px solid var(--line);
+}
+
+/* ── LOADING OVERLAY (home page) ───────────────────────────────── */
+
+#loading-overlay {
+  position: fixed; inset: 0; z-index: 3000;
+  background: #2c1608;
+  background-image: linear-gradient(180deg, #3a1e0d 0%, #2c1608 100%);
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity .5s ease;
+}
+#loading-overlay.hidden { opacity: 0; pointer-events: none; }
+.loading-logo { height: 90px; width: auto; animation: loading-pulse 1.4s ease-in-out infinite; }
+@keyframes loading-pulse {
+  0%, 100% { transform: scale(1); opacity: .85; }
+  50% { transform: scale(1.08); opacity: 1; }
 }
 
 /* ── HEADER ─────────────────────────────────────────────────────── */
@@ -139,7 +162,12 @@ p { margin: 0 0 1em; }
   display: none;
   position: fixed;
   inset: 0;
-  z-index: 999;
+  /* Must outrank the sticky header's z-index (1000) — otherwise the
+     header (and its burger button) renders on top of this full-screen
+     overlay, so a tap in that corner hits the still-active burger button
+     (re-opening, a no-op since it's already open) instead of the X below it,
+     making the menu look like it opens but never closes. */
+  z-index: 1001;
   background: rgba(45, 24, 9, .99);
   flex-direction: column;
   align-items: center;
@@ -166,22 +194,68 @@ p { margin: 0 0 1em; }
 #moisdes-footer {
   background: var(--footer-bg);
   border-top: 1px solid rgba(0, 0, 0, .2);
-  padding: 2rem 48px 1.75rem;
+  padding: 2rem 48px 1.5rem;
 }
 .footer-inner {
   max-width: 1100px;
   margin: 0 auto;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 1rem 2rem;
+  text-align: center;
+  gap: 1rem;
 }
 .footer-logo img { height: 36px; width: auto; opacity: .9; }
-.footer-nav { display: flex; flex-wrap: wrap; gap: .3rem 1.4rem; list-style: none; margin: 0; padding: 0; }
+.footer-nav {
+  display: flex; flex-wrap: wrap; justify-content: center;
+  gap: .3rem 1.4rem; list-style: none; margin: 0; padding: 0;
+}
 .footer-nav a { color: var(--ink-soft); font-size: .88rem; font-weight: 500; }
 .footer-nav a:hover { color: var(--ink); }
-.footer-copy { direction: ltr; font-size: .75rem; color: var(--ink-faint); white-space: nowrap; }
+.footer-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: .6rem; }
+.newsletter-btn {
+  background: var(--accent); color: #2c1608; font-weight: 700; font-size: .82rem;
+  padding: .45rem 1rem; border-radius: 3px; white-space: nowrap;
+}
+.newsletter-btn:hover { opacity: .9; }
+/* Attribution row — small, bottom-center, visually separate from the
+   main nav/actions above it. */
+.footer-attribution {
+  display: flex; flex-direction: column; align-items: center; gap: .35rem;
+  padding-top: .75rem; border-top: 1px solid var(--line); width: 100%;
+}
+.powered-by {
+  display: flex; align-items: center; gap: .3rem; direction: ltr;
+  font-size: .68rem; color: var(--ink-faint); white-space: nowrap;
+}
+.powered-by img { height: 28px; width: auto; opacity: .85; }
+.powered-by:hover { color: var(--ink-soft); }
+.footer-copy { direction: ltr; font-size: .72rem; color: var(--ink-faint); white-space: nowrap; }
+
+/* ── SHARE BUTTON ───────────────────────────────────────────────── */
+
+.share-wrap { position: relative; display: inline-block; }
+.share-btn {
+  background: rgba(255, 255, 255, .08); border: 1px solid var(--line); color: var(--ink-soft);
+  border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: background .15s, color .15s;
+}
+.share-btn:hover { background: rgba(255, 255, 255, .16); color: var(--ink); }
+.share-menu {
+  /* position: fixed with top/bottom/left/right set from JS (button's
+     live getBoundingClientRect), since it's appended to <body> rather
+     than the button's own (possibly overflow:hidden) card ancestor. */
+  position: fixed; z-index: 2500;
+  background: var(--footer-bg); border: 1px solid var(--line); border-radius: 6px;
+  padding: .4rem; flex-direction: column; gap: .2rem; min-width: 130px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .45);
+}
+.share-menu a, .share-menu button {
+  display: block; width: 100%; text-align: right; background: none; border: none;
+  color: var(--ink-soft); font-family: inherit; font-size: .82rem; padding: .4rem .6rem;
+  border-radius: 3px; cursor: pointer;
+}
+.share-menu a:hover, .share-menu button:hover { background: rgba(255, 255, 255, .08); color: var(--ink); }
 
 /* ── CARDS / GRID ───────────────────────────────────────────────── */
 
@@ -190,23 +264,47 @@ p { margin: 0 0 1em; }
 @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
 
 /* Vertical stack for image galleries (posts/posters/events) — full-view,
-   uncropped, one per row, instead of a cropped thumbnail grid. */
-.stack { display: flex; flex-direction: column; gap: .75rem; }
-.stack img { width: 100%; height: auto; border-radius: 3px; cursor: zoom-in; }
+   uncropped, one per row, instead of a cropped thumbnail grid. Every
+   image renders at the same width; height follows its own aspect
+   ratio (no cap), so a tall image is simply tall. */
+.stack { display: flex; flex-direction: column; gap: .9rem; align-items: center; }
+.stack img {
+  width: min(480px, 100%); height: auto;
+  border-radius: 10px; cursor: zoom-in; box-shadow: 0 6px 20px rgba(0, 0, 0, .35);
+}
+
+/* Posters: uncropped but wrapped into a grid, not a one-per-row stack */
+.poster-grid { display: flex; flex-wrap: wrap; gap: 1rem; }
+.poster-grid img {
+  max-width: 200px; max-height: 260px; width: auto; height: auto;
+  border-radius: 10px; cursor: zoom-in; box-shadow: 0 6px 20px rgba(0, 0, 0, .35);
+}
+@media (max-width: 560px) { .poster-grid img { max-width: 100%; } }
 
 .card {
   background: var(--card-bg);
   border: 1px solid var(--line);
-  border-radius: 3px;
+  border-radius: 10px;
   overflow: hidden;
-  transition: background .15s, border-color .15s;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+  transition: background .15s, border-color .15s, transform .15s;
 }
-.card:hover { background: var(--card-bg-hover); border-color: rgba(255, 255, 255, .22); }
+.card:hover { background: var(--card-bg-hover); border-color: rgba(255, 255, 255, .22); transform: translateY(-2px); }
 .card-media { aspect-ratio: 4 / 3; overflow: hidden; background: rgba(0, 0, 0, .2); }
+
+/* ── DETAIL-PAGE BODY/DESCRIPTION CONTAINER ─────────────────────── */
+
+.detail-body {
+  background: var(--card-bg); border: 1px solid var(--line); border-radius: 10px;
+  padding: 1.1rem 1.3rem; margin: 1rem 0; line-height: 1.7;
+}
+.detail-body:empty { display: none; }
+.detail-top-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .8rem; flex-wrap: wrap; }
+.detail-top-row .event-tags { margin-top: 0; }
 .card-media img { width: 100%; height: 100%; object-fit: cover; }
 .card-body { padding: 1rem 1.1rem 1.2rem; }
 .card-date { font-size: .78rem; color: var(--ink-faint); margin-bottom: .3rem; }
-.card-title { font-size: 1.05rem; font-weight: 700; margin: 0 0 .3rem; }
+.card-title { font-size: 1.05rem; font-weight: 700; margin: 0 0 .3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-excerpt { font-size: .88rem; color: var(--ink-soft); margin: 0; }
 
 .badge-new {
@@ -245,14 +343,38 @@ p { margin: 0 0 1em; }
 
 /* ── EVENT / VIDEO CARDS ────────────────────────────────────────── */
 
+/* Event cards sit in a grid, newest first — first-in-DOM lands rightmost
+   in RTL, so date-desc order already puts the newest event on the right. */
+.events-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 1.25rem; }
+@media (max-width: 560px) { .events-grid { grid-template-columns: repeat(2, 1fr); } }
+
 .event-card, .video-card {
   background: var(--card-bg);
   border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 1.25rem 1.4rem;
-  margin-bottom: 1.25rem;
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
 }
-.event-title, .video-title { font-size: 1.1rem; font-weight: 700; margin-bottom: .3rem; }
+.video-card { max-width: 520px; }
+.video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1.25rem; }
+.video-thumb { position: relative; background: #000; }
+.video-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.video-play-badge {
+  position: absolute; inset: 0; margin: auto; width: 44px; height: 44px;
+  background: rgba(0, 0, 0, .55); border-radius: 50%; color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 1rem;
+  transition: background .15s, transform .15s;
+}
+.video-card-item:hover .video-play-badge { background: var(--accent); color: #2c1608; transform: scale(1.08); }
+@media (max-width: 560px) { .video-grid { grid-template-columns: repeat(2, 1fr); } }
+.events-grid .event-card { margin-bottom: 0; }
+.event-cover {
+  aspect-ratio: 16 / 9; background-size: cover; background-position: center;
+  border-radius: 10px 10px 0 0; margin: -1rem -1.1rem 1rem; width: calc(100% + 2.2rem);
+  background-color: rgba(0, 0, 0, .2);
+}
+.event-title, .video-title { font-size: 1.1rem; font-weight: 700; margin-bottom: .3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .event-meta { font-size: .82rem; color: var(--ink-faint); margin-bottom: .6rem; }
 .event-desc { font-size: .92rem; color: var(--ink-soft); margin-bottom: .8rem; }
 .event-tags { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }
@@ -262,10 +384,111 @@ p { margin: 0 0 1em; }
   transition: color .15s, background .15s;
 }
 a.tag-pill:hover { color: var(--ink); background: rgba(255, 255, 255, .14); }
-audio { width: 100%; margin-top: .5rem; }
+audio { width: 100%; max-width: 400px; margin-top: .5rem; }
+
+.playlist-player {
+  margin-top: 1rem;
+  background: rgba(0, 0, 0, .18);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .9rem 1rem 1rem;
+}
+.playlist-player .track-name {
+  font-size: .88rem; font-weight: 700; color: var(--accent);
+  margin-bottom: .6rem;
+}
+/* The <audio> element itself is headless (no controls attribute) — every
+   control the visitor sees is the custom .audio-player UI below, so the
+   raw element stays invisible and out of layout. */
+.playlist-player audio { display: none; }
+
+.audio-player { display: flex; align-items: center; gap: .7rem; }
+.player-btn {
+  flex-shrink: 0; border: none; cursor: pointer; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity .15s, background .15s, color .15s;
+}
+.player-playpause { width: 34px; height: 34px; background: var(--accent); color: #2c1608; }
+.player-playpause:hover { opacity: .88; }
+.player-mute { width: 26px; height: 26px; background: rgba(255, 255, 255, .08); color: var(--ink-soft); }
+.player-mute:hover { color: var(--ink); }
+/* Scrubber always reads left-to-right (standard convention for media
+   controls even inside an RTL page) so "played" visually grows from the
+   left regardless of the page's own text direction. */
+.player-progress-wrap { flex: 1; min-width: 0; direction: ltr; cursor: pointer; padding: .5rem 0; }
+.player-progress-bg { position: relative; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .15); }
+.player-progress-fill { position: absolute; inset-inline-start: 0; top: 0; bottom: 0; width: 0; background: var(--accent); border-radius: 2px; }
+.player-progress-handle {
+  position: absolute; top: 50%; left: 0; width: 11px; height: 11px; border-radius: 50%;
+  background: var(--accent); transform: translate(-50%, -50%); box-shadow: 0 0 0 3px rgba(217, 165, 92, .25);
+}
+.player-time { flex-shrink: 0; font-size: .72rem; color: var(--ink-faint); direction: ltr; white-space: nowrap; }
+.player-volume { display: flex; align-items: center; gap: .4rem; flex-shrink: 0; }
+.player-volume-slider { width: 60px; accent-color: var(--accent); }
+@media (max-width: 480px) {
+  .player-volume-slider { display: none; }
+  .player-time { display: none; }
+}
+
+.playlist-tracks {
+  list-style: none; margin: .8rem 0 0; padding: 0;
+  max-height: 190px; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 5px;
+  background: rgba(0, 0, 0, .15);
+}
+.playlist-tracks li {
+  padding: .5rem .8rem; font-size: .84rem; color: var(--ink-soft); cursor: pointer;
+  border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: .6rem;
+  transition: background .15s, color .15s;
+}
+.playlist-tracks li:last-child { border-bottom: none; }
+.playlist-tracks li:hover { background: rgba(255, 255, 255, .07); color: var(--ink); }
+.playlist-tracks li.playing { color: var(--accent); font-weight: 700; background: rgba(217, 165, 92, .12); }
+.playlist-tracks .track-num {
+  flex-shrink: 0; width: 1.4rem; text-align: center; font-size: .75rem;
+  color: var(--ink-faint); font-weight: 700;
+}
+.playlist-tracks li.playing .track-num { color: var(--accent); }
+.playlist-tracks .track-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .video-embed { position: relative; padding-top: 56.25%; border-radius: 3px; overflow: hidden; margin-bottom: .8rem; background: #000; }
 .video-embed iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.video-embed-native { width: 100%; border-radius: 3px; margin-bottom: .8rem; background: #000; display: block; }
+
+/* ── EVENT DETAIL MODAL ──────────────────────────────────────────── */
+
+.event-modal {
+  position: fixed; inset: 0; z-index: 1800; background: rgba(15, 8, 3, .78);
+  display: none; align-items: flex-start; justify-content: center;
+  padding: 3rem 1rem; overflow-y: auto;
+}
+.event-modal.open { display: flex; }
+.event-modal-inner {
+  background: var(--footer-bg); border: 1px solid var(--line); border-radius: 12px;
+  max-width: 640px; width: 100%; padding: 1.6rem 1.6rem 2rem; position: relative;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .5);
+}
+.event-modal-close {
+  position: absolute; top: .7rem; left: .7rem; background: rgba(255, 255, 255, .08);
+  border: none; color: var(--ink-soft); font-size: 1.1rem; cursor: pointer;
+  width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+}
+.event-modal-close:hover { background: rgba(255, 255, 255, .16); color: var(--ink); }
+.event-modal-cover {
+  aspect-ratio: 16 / 9; background-size: cover; background-position: center;
+  border-radius: 10px; margin-bottom: 1rem; background-color: rgba(0, 0, 0, .2);
+}
+.map-links { display: flex; gap: .6rem; margin: .8rem 0; flex-wrap: wrap; }
+.map-link {
+  display: inline-flex; align-items: center; gap: .35rem; font-size: .8rem; font-weight: 700;
+  background: rgba(255, 255, 255, .07); border: 1px solid var(--line); color: var(--ink-soft);
+  padding: .4rem .8rem; border-radius: 20px; transition: background .15s, color .15s;
+}
+.map-link:hover { background: rgba(255, 255, 255, .14); color: var(--ink); }
+
+.event-card-compact { cursor: pointer; }
+.event-card-compact .card-media { aspect-ratio: 16 / 10; }
 
 .tag-filter-banner {
   display: flex; align-items: center; gap: .6rem; margin-bottom: 1.5rem;
@@ -285,6 +508,23 @@ audio { width: 100%; margin-top: .5rem; }
 .pdf-card { text-align: center; }
 .pdf-card .card-media { aspect-ratio: 3 / 4; }
 .pdf-card .card-media img { object-fit: contain; background: rgba(255, 255, 255, .04); }
+#pdfs-grid.grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+.pdf-title { font-size: .85rem; white-space: normal; -webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.pdf-meta { font-size: .75rem; color: var(--ink-soft); margin-top: .2rem; }
+
+.pdf-filters { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1.5rem; }
+.pdf-filters select {
+  padding: .4rem .6rem; border-radius: 3px; border: 1px solid var(--line);
+  background: rgba(255, 255, 255, .06); color: var(--ink); font-family: inherit; font-size: .85rem;
+}
+/* The closed <select> picks up the dark theme fine, but the native open
+   dropdown list doesn't inherit a semi-transparent background — it falls
+   back to the OS default (usually white), while the inherited white text
+   color stays white, making every option invisible until highlighted. */
+.pdf-filters select option {
+  background: #2c1608;
+  color: #fff;
+}
 
 /* ── LIGHTBOX ───────────────────────────────────────────────────── */
 
@@ -295,7 +535,7 @@ audio { width: 100%; margin-top: .5rem; }
   padding: 2rem;
 }
 .lightbox.open { display: flex; }
-.lightbox img { max-width: 100%; max-height: 90vh; border-radius: 2px; }
+.lightbox img { max-width: 100%; max-height: 90vh; border-radius: 10px; box-shadow: 0 10px 40px rgba(0, 0, 0, .5); }
 .lightbox-close {
   position: absolute; top: 1.25rem; left: 1.25rem;
   background: none; border: none; color: rgba(255, 255, 255, .7);
@@ -304,8 +544,12 @@ audio { width: 100%; margin-top: .5rem; }
 .lightbox-nav {
   position: absolute; top: 50%; transform: translateY(-50%);
   background: none; border: none; color: rgba(255, 255, 255, .7);
-  font-size: 2rem; cursor: pointer; padding: 1rem;
+  cursor: pointer; padding: 1rem;
 }
+.lightbox-nav .chevron { width: 26px; height: 26px; }
+.back-link { display: inline-flex; align-items: center; gap: .3rem; color: var(--ink-soft); }
+.back-link:hover { color: var(--ink); }
+.back-link .chevron { flex-shrink: 0; }
 /* RTL: "next" (forward through the gallery) sits on the right, matching
    right-to-left reading direction; "previous" sits on the left. */
 .lightbox-next { right: .5rem; }
@@ -329,9 +573,287 @@ audio { width: 100%; margin-top: .5rem; }
 .search-result-meta { font-size: .78rem; color: var(--ink-faint); margin-bottom: .3rem; }
 .search-result-excerpt { font-size: .88rem; color: var(--ink-soft); }
 
+/* ── TICKER (recent simchas) ────────────────────────────────────── */
+
+.ticker-wrap {
+  overflow: hidden;
+  background: var(--footer-bg);
+  border-bottom: 1px solid var(--line);
+  padding: .5rem 0;
+  white-space: nowrap;
+  position: sticky;
+  top: 66px; /* header height */
+  z-index: 999;
+  /* Forced LTR so the track's un-transformed position starts flush at
+     the container's edge — under RTL block flow it instead sits far
+     off-screen, which is what caused the long blank gap before content
+     appeared. The Hebrew text inside still renders right-to-left on its
+     own (Unicode bidi is per-character, independent of container dir). */
+  direction: ltr;
+}
+.ticker-track {
+  display: inline-block;
+  width: max-content;
+  animation: ticker-scroll 90s linear infinite;
+}
+.ticker-track span {
+  font-size: .9rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+/* Content is doubled back-to-back (see home.js), so sliding between
+   these two exact points loops seamlessly with no gap or jump. Reversed
+   from the earlier version: this direction moves left-to-right. */
+@keyframes ticker-scroll {
+  from { transform: translateX(-50%); }
+  to { transform: translateX(0); }
+}
+
+/* ── HOME MOSAIC (magazine-style mixed content grid) ────────────── */
+
+.mosaic { display: grid; grid-template-columns: repeat(4, 1fr); grid-auto-rows: 150px; grid-auto-flow: dense; gap: 1rem; }
+.mosaic-big { grid-column: span 2; grid-row: span 2; }
+.mosaic-wide { grid-column: span 2; }
+.mosaic-tall { grid-row: span 2; }
+@media (max-width: 860px) {
+  .mosaic { grid-template-columns: repeat(2, 1fr); }
+  .mosaic-big, .mosaic-wide { grid-column: span 2; }
+}
+/* Stays a 2-column dense grid on phones too, instead of collapsing to a
+   single stacked column — keeps the magazine feel everywhere. */
+@media (max-width: 560px) {
+  .mosaic { grid-template-columns: repeat(2, 1fr); grid-auto-rows: 120px; gap: .6rem; }
+  .mosaic-big { grid-column: span 2; grid-row: span 2; }
+  .mosaic-wide { grid-column: span 2; }
+  .mosaic-tall { grid-row: span 2; }
+}
+
+.mosaic-item {
+  position: relative;
+  display: block;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+}
+.mosaic-media { position: absolute; inset: 0; background-size: cover; background-position: center; transition: transform .2s; }
+.mosaic-item:hover .mosaic-media { transform: scale(1.04); }
+.mosaic-overlay {
+  position: absolute; inset-inline: 0; bottom: 0;
+  padding: .6rem .8rem .5rem;
+  background: linear-gradient(0deg, rgba(15, 8, 3, .92) 0%, rgba(15, 8, 3, .55) 60%, transparent 100%);
+}
+.mosaic-badge {
+  display: inline-block; font-size: .68rem; font-weight: 700; color: var(--accent);
+  background: rgba(0, 0, 0, .4); padding: .1rem .5rem; border-radius: 10px; margin-bottom: .3rem;
+}
+.mosaic-title {
+  font-size: .9rem; font-weight: 700; color: #fff; line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.mosaic-big .mosaic-title { font-size: 1.15rem; }
+.mosaic-date { font-size: .7rem; color: rgba(255, 255, 255, .65); margin-top: .15rem; }
+
+.load-more-btn {
+  background: transparent; color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 20px; padding: .55rem 1.6rem; font-weight: 700; font-size: .9rem;
+  cursor: pointer; font-family: inherit; transition: background .15s, color .15s;
+}
+.load-more-btn:hover { background: var(--accent); color: #2c1608; }
+
+/* ── HOME LAYOUT (sidebar on desktop, stacked on mobile) ─────────── */
+
+.home-layout { display: grid; grid-template-columns: 1fr 280px; gap: 2rem; align-items: start; }
+.home-sidebar { position: sticky; top: 90px; display: flex; flex-direction: column; gap: 1rem; }
+.home-main { min-width: 0; }
+@media (max-width: 900px) {
+  .home-layout { grid-template-columns: 1fr; }
+  .home-sidebar { position: static; }
+}
+
+/* ── HOME INFO WIDGETS (zmanim / daf) ───────────────────────────── */
+
+.widget-box {
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: .7rem 1.1rem;
+  margin-bottom: 1rem;
+}
+.widget-title { font-weight: 700; margin-bottom: .05rem; font-size: .95rem; }
+.widget-eng-date { direction: ltr; text-align: right; font-size: .68rem; color: var(--ink-faint); margin-bottom: .35rem; }
+/* Falls back to a single column automatically once the box is narrow
+   (sidebar on desktop, most phones) — flattens into 2-3 columns
+   whenever there's width to spare (full-width on tablets, wide phones). */
+.zmanim-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: .1rem 1rem; }
+.zman-item {
+  display: flex; align-items: baseline; justify-content: space-between; gap: .5rem;
+  font-size: .78rem; padding: .18rem 0; border-bottom: 1px dashed var(--line);
+}
+.zman-label { color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.zman-value { color: var(--ink); direction: ltr; white-space: nowrap; }
+.widget-loc { font-size: .68rem; color: var(--ink-faint); margin-top: .3rem; direction: ltr; unicode-bidi: isolate; text-align: right; }
+.zman-machmir { font-size: .62rem; color: var(--ink-faint); margin-top: .25rem; }
+.zman-machmir span { color: var(--ink-soft); direction: ltr; unicode-bidi: isolate; }
+.zman-attribution { font-size: .6rem; color: var(--ink-faint); margin-top: .15rem; direction: ltr; text-align: right; }
+.zman-attribution a { color: var(--ink-soft); }
+.zman-attribution a:hover { color: var(--accent); }
+
+/* The logo stretches to the full height of the row next to it (title +
+   daf text stacked) rather than a small fixed-size icon — needs
+   align-items:stretch (not center) plus height:100% on the image itself,
+   since a flex item's cross-size only stretches the box, not an <img>'s
+   own intrinsic sizing unless told to fill it. */
+.daf-widget-row { display: flex; align-items: stretch; gap: .7rem; }
+.daf-source-logo { flex-shrink: 0; height: 100%; width: auto; max-width: 40%; object-fit: contain; }
+.daf-widget-content { flex: 1; min-width: 0; }
+
+/* ── UPCOMING STRIP (home page, compact) ──────────────────────────── */
+
+.upcoming-strip {
+  display: flex; gap: .8rem; overflow-x: auto; padding-bottom: .3rem;
+  scrollbar-width: none;
+}
+.upcoming-strip::-webkit-scrollbar { display: none; }
+.upcoming-card {
+  flex: 0 0 190px; background: var(--card-bg); border: 1px solid var(--line);
+  border-radius: 4px; padding: .7rem .8rem;
+}
+.upcoming-card-title { font-size: .85rem; font-weight: 700; margin-bottom: .25rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.upcoming-card-date { font-size: .72rem; color: var(--ink-faint); }
+
+/* ── BUTTONS ────────────────────────────────────────────────────── */
+
+.btn { display: inline-block; font-weight: 700; font-size: .85rem; padding: .5rem 1.1rem; border-radius: 4px; white-space: nowrap; }
+.btn-primary { background: var(--accent); color: #2c1608; }
+.btn-primary:hover { opacity: .9; }
+.btn-outline { background: none; border: 1px solid var(--line); color: var(--ink-soft); }
+.btn-outline:hover { border-color: var(--accent); color: var(--ink); }
+.btn-sm { font-size: .78rem; padding: .4rem .85rem; }
+
+/* ── CALENDAR PAGE ──────────────────────────────────────────────── */
+
+.page-wide { max-width: 1360px; }
+
+.calendar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem; }
+.calendar-header-actions { display: flex; gap: .6rem; flex-wrap: wrap; }
+
+.calendar-nav { display: flex; align-items: center; justify-content: center; gap: 1.5rem; margin-bottom: 1rem; }
+.calendar-month-wrap { display: flex; flex-direction: column; align-items: center; gap: .1rem; min-width: 10rem; }
+.calendar-month-label { font-size: 1.15rem; font-weight: 700; text-align: center; }
+.calendar-month-heb { font-size: .72rem; font-weight: 400; color: var(--ink-faint); }
+.calendar-gcal-link { font-size: .72rem; color: var(--ink-faint); }
+.calendar-gcal-link:hover { color: var(--accent); }
+.cal-nav-btn {
+  background: var(--card-bg); border: 1px solid var(--line); color: var(--ink);
+  width: 34px; height: 34px; border-radius: 50%;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: background .15s; flex-shrink: 0;
+}
+.cal-nav-btn .chevron { width: 16px; height: 16px; }
+.cal-nav-btn:hover { background: var(--card-bg-hover); }
+
+.calendar-body { display: grid; grid-template-columns: 1fr 320px; gap: 1.5rem; align-items: start; }
+@media (max-width: 900px) {
+  .calendar-body { grid-template-columns: 1fr; }
+}
+
+/* grid-template-rows keeps the weekday-label row (the first row) sized
+   to its own short content; grid-auto-rows then fixes every subsequent
+   (day-cell) row to the same height — without it, a row with an
+   event-heavy day stretches ALL cells in that row (CSS Grid rows
+   default to equal height across their whole row), so weeks with
+   events end up visibly taller than weeks without. */
+/* min-width:0 here is the actual fix for the width-varies-between-months
+   bug. .calendar-grid-col (wrapping .cal-grid + the attribution line) is
+   the real grid item inside .calendar-body's 1fr column — a bare "1fr"
+   track's minimum size defaults to auto (= its content's min-content
+   width), not 0. Some months show a long nowrap holiday/parsha label;
+   without this, that month's column would refuse to shrink below the
+   label's width, while a month without one shrinks to the "true" 1fr
+   share — different pixel widths for the identical layout depending on
+   which month happens to be shown. (Previously put on .cal-grid itself,
+   which doesn't work — .cal-grid isn't the grid item, its wrapper is.) */
+.calendar-grid-col { min-width: 0; }
+/* grid-template-rows is spelled out as a fixed 6-row track list (not
+   grid-auto-rows) so a 5-week month reserves the exact same total grid
+   height as a 6-week month — its unused 6th row just stays blank
+   instead of the whole calendar box shrinking and jumping in height
+   when the user navigates between months. */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); grid-template-rows: auto repeat(6, 118px); gap: 3px; }
+.cal-weekday {
+  text-align: center; font-size: .75rem; font-weight: 700; color: var(--ink-faint);
+  padding: .5rem 0;
+}
+.cal-day {
+  position: relative; height: 100%; min-width: 0; overflow: hidden;
+  background: var(--card-bg); border-radius: 4px; cursor: pointer;
+  display: flex; flex-direction: column; padding: .3rem .35rem; gap: .15rem;
+  transition: background .15s;
+}
+.cal-day:hover { background: var(--card-bg-hover); }
+.cal-day.other-month { opacity: .35; }
+.cal-day.is-today .cal-daynum {
+  background: var(--accent); color: #2c1608; border-radius: 50%;
+  width: 1.5rem; height: 1.5rem; display: flex; align-items: center; justify-content: center;
+}
+.cal-day-top { display: flex; align-items: baseline; justify-content: space-between; min-width: 0; }
+.cal-daynum { font-size: .85rem; font-weight: 700; }
+.cal-hebday { font-size: .6rem; color: var(--ink-faint); }
+.cal-holiday { font-size: .62rem; font-weight: 700; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-fast { font-size: .58rem; color: var(--ink-faint); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-roshchodesh { font-size: .58rem; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-parsha { font-size: .6rem; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-events { display: flex; flex-direction: column; gap: .12rem; margin-top: .1rem; min-width: 0; }
+.cal-event-pill {
+  font-size: .65rem; background: rgba(217, 165, 92, .18); color: var(--accent);
+  padding: .05rem .35rem; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0; max-width: 100%; cursor: pointer; box-sizing: border-box;
+}
+.cal-event-more { font-size: .62rem; color: var(--ink-faint); padding: 0 .35rem; }
+
+.cal-attribution { font-size: .68rem; color: var(--ink-faint); margin-top: .5rem; text-align: center; direction: ltr; }
+.cal-attribution a { color: var(--ink-soft); }
+.cal-attribution a:hover { color: var(--accent); }
+
+.calendar-agenda-panel {
+  background: var(--card-bg); border: 1px solid var(--line); border-radius: 4px;
+  padding: 1rem 1.1rem; max-height: 640px; overflow-y: auto; scroll-behavior: smooth;
+  scrollbar-width: none;
+}
+.calendar-agenda-panel::-webkit-scrollbar { display: none; }
+.calendar-agenda-title { font-weight: 700; margin-bottom: .5rem; font-size: .95rem; color: var(--accent); }
+.agenda-day-heading {
+  font-size: .85rem; font-weight: 700; color: var(--ink-soft);
+  margin: 1rem 0 .4rem; padding-top: .6rem; border-top: 1px solid var(--line);
+}
+.agenda-day-heading:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+.agenda-day-heading.is-today { color: var(--accent); }
+
+@media (max-width: 600px) {
+  .cal-grid { grid-template-rows: auto repeat(6, 68px); }
+  .cal-day { padding: .2rem; }
+  .cal-hebday { display: none; }
+  .cal-parsha { display: none; }
+  .cal-fast, .cal-roshchodesh { display: none; }
+  .cal-holiday { font-size: .56rem; }
+  .cal-event-pill { font-size: 0; padding: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); overflow: visible; }
+  .cal-event-more { display: none; }
+  .cal-events { flex-direction: row; flex-wrap: wrap; gap: .2rem; }
+}
+
 /* ── EMPTY / LOADING STATES ─────────────────────────────────────── */
 
-.state-msg { color: var(--ink-faint); font-size: .95rem; padding: 2rem 0; text-align: center; }
+.state-msg { color: var(--ink-faint); font-size: .95rem; padding: 2rem 0; }
+
+/* Reserve some height for the main listing containers up front so the
+   page doesn't visibly jump/shift once their content finishes loading
+   and replaces the (much shorter) "loading..." placeholder. */
+#events-list, #home-mosaic, #video-grid, #blog-list, #pdfs-grid, #posters-list {
+  min-height: 240px;
+}
 
 /* ── RESPONSIVE ─────────────────────────────────────────────────── */
 

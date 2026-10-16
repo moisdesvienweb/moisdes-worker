@@ -35,6 +35,15 @@ window.MOISDES.adminUpload = (function () {
     if (value) t.value = value;
     return t;
   }
+  // Rich-text (bold/italic/underline/font/size/alignment/RTL-LTR) field
+  // for "description"-style content — replaces a plain textarea. Returns
+  // the wrapped <div class="field-group"> to append, plus the editor
+  // object (.getHtml() used at submit time instead of reading .value).
+  function richTextField(labelText, initialHtml) {
+    const host = el('div');
+    const editor = window.MOISDES.richtext.createEditor(host, initialHtml || '');
+    return { group: fieldGroup(labelText, host), editor };
+  }
   function statusEl() { return el('div', 'status-msg'); }
   function setStatus(node, message, ok) {
     node.textContent = message;
@@ -53,6 +62,39 @@ window.MOISDES.adminUpload = (function () {
     return s;
   }
 
+  // Same free-text-input + "pick an existing one" dropdown pattern as
+  // AF.createCategoryInput, but for PDF issue years — existing years are
+  // pulled from the already-published PDFs (no dedicated backend table
+  // needed, since years live directly on the pdfs rows). Picking an
+  // existing year still doesn't block typing a new one.
+  function yearInput(initialValue) {
+    const row = el('div', 'field-row');
+    const input = el('input');
+    input.type = 'text';
+    input.placeholder = 'Issue year / number';
+    input.value = initialValue || '';
+    const select = el('select');
+    select.innerHTML = '<option value="">Existing years…</option>';
+    select.addEventListener('change', () => { if (select.value) { input.value = select.value; select.value = ''; } });
+    row.appendChild(input);
+    row.appendChild(select);
+
+    api.get('/api/pdfs').then(({ pdfs }) => {
+      const years = [...new Set((pdfs || []).map((p) => p.year).filter(Boolean))].sort((a, b) => {
+        const na = parseFloat(a), nb = parseFloat(b);
+        if (!isNaN(na) && !isNaN(nb)) return nb - na;
+        return String(b).localeCompare(String(a));
+      });
+      years.forEach((y) => {
+        const o = el('option', '', y);
+        o.value = y;
+        select.appendChild(o);
+      });
+    }).catch(() => {});
+
+    return { row, getValue: () => input.value.trim() };
+  }
+
   // ── FORM BUILDER — shared by "Upload" (create) and "Browse & Edit" (edit) ──
   //
   // opts: { existing, onSaved }
@@ -62,42 +104,60 @@ window.MOISDES.adminUpload = (function () {
   function buildForm(type, container, opts = {}) {
     const existing = opts.existing || null;
     const isEdit = !!existing;
+    // Duplicating: opts.prefill supplies the same text/metadata fields as
+    // an edit would, but isEdit stays false (this is a fresh Publish) and
+    // nothing R2-file-related (gallery, thumbnail, PDF, video file) is
+    // carried over — those always come from `existing` only, so a
+    // duplicate never shares files with (or can delete files from) the
+    // item it was copied from.
+    const prefillSrc = existing || opts.prefill || null;
 
     container.innerHTML = '';
     const form = el('form');
     const status = statusEl();
 
+    // Pressing Enter in any plain text field natively submits the form —
+    // this is almost certainly what's been reported as files "uploading"
+    // or the record saving before the Publish/Save button is clicked.
+    // Only an actual click (or Enter while focused on the submit button
+    // itself) should submit.
+    form.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && e.target.type !== 'submit') {
+        e.preventDefault();
+      }
+    });
+
     const datePickerWrap = el('div');
-    form.appendChild(fieldGroup('Date', datePickerWrap));
-    const datePicker = AF.createDatePicker(datePickerWrap, existing ? existing.date : '');
+    form.appendChild(fieldGroup(type === 'simchas' ? 'Date added' : 'Date', datePickerWrap));
+    const datePicker = AF.createDatePicker(datePickerWrap, prefillSrc ? (prefillSrc.date || prefillSrc.date_added || '').slice(0, 10) : '');
 
     let getExtra;
     let gallery;
     let tagInput, categoryInput;
 
     if (type === 'posts') {
-      const title = textInput('Title', existing?.title);
+      const title = textInput('Title', prefillSrc?.title);
       form.appendChild(fieldGroup('Title', title));
-      const body = textarea('Post text...', existing?.body);
-      form.appendChild(fieldGroup('Text', body));
+      const bodyField = richTextField('Text', prefillSrc?.body);
+      form.appendChild(bodyField.group);
 
       const catWrap = el('div');
       form.appendChild(fieldGroup('Category', catWrap));
-      categoryInput = AF.createCategoryInput(catWrap, existing?.category);
+      categoryInput = AF.createCategoryInput(catWrap, prefillSrc?.category);
 
       const tagWrap = el('div');
       form.appendChild(fieldGroup('Tags', tagWrap));
-      tagInput = AF.createTagInput(tagWrap, existing?.tags);
+      tagInput = AF.createTagInput(tagWrap, prefillSrc?.tags);
 
       const galleryWrap = el('div');
       form.appendChild(fieldGroup('Images', galleryWrap));
       gallery = AF.createGalleryUploader(galleryWrap, { accept: 'image/*', existingFolder: existing?.folder_url });
 
-      getExtra = () => ({ title: title.value, body: body.value, category: categoryInput.getValue(), tags: tagInput.getValue() });
+      getExtra = () => ({ title: title.value, body: bodyField.editor.getHtml(), category: categoryInput.getValue(), tags: tagInput.getValue() });
 
     } else if (type === 'posters') {
       const parshaWrap = el('div');
-      const select = parshaSelect(existing?.parsha);
+      const select = parshaSelect(prefillSrc?.parsha);
       parshaWrap.appendChild(select);
       form.appendChild(fieldGroup('Parsha', parshaWrap));
 
@@ -108,72 +168,138 @@ window.MOISDES.adminUpload = (function () {
       getExtra = () => ({ parsha: select.value });
 
     } else if (type === 'events') {
-      const title = textInput('Title', existing?.title);
+      const title = textInput('Title', prefillSrc?.title);
       form.appendChild(fieldGroup('Title', title));
-      const location = textInput('Location', existing?.location);
+      const location = textInput('Location', prefillSrc?.location);
       form.appendChild(fieldGroup('Location', location));
 
       const catWrap = el('div');
       form.appendChild(fieldGroup('Category', catWrap));
-      categoryInput = AF.createCategoryInput(catWrap, existing?.category);
+      categoryInput = AF.createCategoryInput(catWrap, prefillSrc?.category);
 
-      const description = textarea('Description', existing?.description);
-      form.appendChild(fieldGroup('Description', description));
+      const descriptionField = richTextField('Description', prefillSrc?.description);
+      form.appendChild(descriptionField.group);
 
       const tagWrap = el('div');
       form.appendChild(fieldGroup('Tags', tagWrap));
-      tagInput = AF.createTagInput(tagWrap, existing?.tags);
+      tagInput = AF.createTagInput(tagWrap, prefillSrc?.tags);
+
+      // Thumbnail — separate from the photos/audio gallery below, this is
+      // what shows on the home page and anywhere else a single preview
+      // image is needed.
+      let eventThumbFile = null, eventThumbFileName = '';
+      const eventThumbNote = existing?.thumb_url ? el('div', 'state-msg', `Current thumbnail: ${existing.thumb_url.split('/').pop()}`) : null;
+      if (eventThumbNote) form.appendChild(eventThumbNote);
+      const eventThumbWrap = el('div');
+      const eventThumbInput = el('input');
+      eventThumbInput.type = 'file';
+      eventThumbInput.accept = 'image/*';
+      eventThumbWrap.appendChild(eventThumbInput);
+      const eventThumbPreview = el('div');
+      eventThumbPreview.style.margin = '.5rem 0';
+      eventThumbWrap.appendChild(eventThumbPreview);
+      const eventThumbNameWrap = el('div');
+      const eventThumbNameInput = textInput('File name');
+      eventThumbNameWrap.style.display = 'none';
+      eventThumbNameWrap.appendChild(eventThumbNameInput);
+      eventThumbWrap.appendChild(eventThumbNameWrap);
+      eventThumbInput.addEventListener('change', () => {
+        const file = eventThumbInput.files[0];
+        if (!file) return;
+        eventThumbFile = file;
+        eventThumbFileName = file.name;
+        eventThumbNameInput.value = eventThumbFileName;
+        eventThumbNameWrap.style.display = 'block';
+        eventThumbPreview.innerHTML = '';
+        const img = el('img');
+        img.src = URL.createObjectURL(file);
+        img.style.maxWidth = '140px';
+        img.style.borderRadius = '4px';
+        eventThumbPreview.appendChild(img);
+      });
+      eventThumbNameInput.addEventListener('input', () => { eventThumbFileName = eventThumbNameInput.value; });
+      form.appendChild(fieldGroup(isEdit ? 'Replace thumbnail (optional)' : 'Thumbnail (optional)', eventThumbWrap));
 
       const galleryWrap = el('div');
       form.appendChild(fieldGroup('Photos & audio', galleryWrap));
       gallery = AF.createGalleryUploader(galleryWrap, { existingFolder: existing?.folder_url });
 
-      getExtra = () => ({ title: title.value, location: location.value, category: categoryInput.getValue(), description: description.value, tags: tagInput.getValue() });
+      getExtra = () => ({ title: title.value, location: location.value, category: categoryInput.getValue(), description: descriptionField.editor.getHtml(), tags: tagInput.getValue() });
+      form._getEventThumb = () => (eventThumbFile ? { file: eventThumbFile, name: eventThumbFileName } : null);
 
     } else if (type === 'videos') {
-      const title = textInput('Title', existing?.title);
+      const title = textInput('Title', prefillSrc?.title);
       form.appendChild(fieldGroup('Title', title));
-      const location = textInput('Location', existing?.location);
+      const location = textInput('Location', prefillSrc?.location);
       form.appendChild(fieldGroup('Location', location));
 
       const catWrap = el('div');
       form.appendChild(fieldGroup('Category', catWrap));
-      categoryInput = AF.createCategoryInput(catWrap, existing?.category);
+      categoryInput = AF.createCategoryInput(catWrap, prefillSrc?.category);
 
-      const description = textarea('Description', existing?.description);
-      form.appendChild(fieldGroup('Description', description));
+      const descriptionField = richTextField('Description', prefillSrc?.description);
+      form.appendChild(descriptionField.group);
 
-      const videoUrl = textInput('https://youtube.com/watch?v=...', existing?.video_url);
-      form.appendChild(fieldGroup('YouTube URL', videoUrl));
+      const videoUrl = textInput('https://youtube.com/watch?v=... (optional)', prefillSrc?.video_url);
+      form.appendChild(fieldGroup('YouTube URL (optional)', videoUrl));
+
+      // Uploading the file directly plays it with a plain <video> tag —
+      // no YouTube branding at all — and takes priority over the YouTube
+      // URL above if both are set. Only upload files you have the rights
+      // to host yourself.
+      let videoFile = null, videoFileName = '';
+      const videoFileNote = existing?.video_file_url ? el('div', 'state-msg', `Current file: ${existing.video_file_url.split('/').pop()}`) : null;
+      if (videoFileNote) form.appendChild(videoFileNote);
+      const videoFileWrap = el('div');
+      const videoFileInput = el('input');
+      videoFileInput.type = 'file';
+      videoFileInput.accept = 'video/*';
+      videoFileWrap.appendChild(videoFileInput);
+      const videoFileNameWrap = el('div');
+      const videoFileNameInput = textInput('File name');
+      videoFileNameWrap.style.display = 'none';
+      videoFileNameWrap.appendChild(videoFileNameInput);
+      videoFileWrap.appendChild(videoFileNameWrap);
+      videoFileInput.addEventListener('change', () => {
+        const file = videoFileInput.files[0];
+        if (!file) return;
+        videoFile = file;
+        videoFileName = file.name;
+        videoFileNameInput.value = videoFileName;
+        videoFileNameWrap.style.display = 'block';
+      });
+      videoFileNameInput.addEventListener('input', () => { videoFileName = videoFileNameInput.value; });
+      form.appendChild(fieldGroup(isEdit ? 'Replace video file (optional, no YouTube branding)' : 'Video file (optional, no YouTube branding)', videoFileWrap));
 
       const tagWrap = el('div');
       form.appendChild(fieldGroup('Tags', tagWrap));
-      tagInput = AF.createTagInput(tagWrap, existing?.tags);
+      tagInput = AF.createTagInput(tagWrap, prefillSrc?.tags);
 
       const galleryWrap = el('div');
       form.appendChild(fieldGroup('Extra images (optional)', galleryWrap));
       gallery = AF.createGalleryUploader(galleryWrap, { accept: 'image/*', existingFolder: existing?.folder_url });
 
-      getExtra = () => ({ title: title.value, location: location.value, category: categoryInput.getValue(), description: description.value, video_url: videoUrl.value, tags: tagInput.getValue() });
+      getExtra = () => ({ title: title.value, location: location.value, category: categoryInput.getValue(), description: descriptionField.editor.getHtml(), video_url: videoUrl.value, tags: tagInput.getValue() });
+      form._getVideoFile = () => (videoFile ? { file: videoFile, name: videoFileName } : null);
 
     } else if (type === 'pdfs') {
-      const title = textInput('Title', existing?.title);
+      const title = textInput('Title', prefillSrc?.title);
       form.appendChild(fieldGroup('Title', title));
 
       const catWrap = el('div');
       form.appendChild(fieldGroup('Category', catWrap));
-      categoryInput = AF.createCategoryInput(catWrap, existing?.category);
+      categoryInput = AF.createCategoryInput(catWrap, prefillSrc?.category);
 
-      const language = textInput('e.g. Yiddish / Hebrew / English', existing?.language);
+      const language = textInput('e.g. Yiddish / Hebrew / English', prefillSrc?.language);
       form.appendChild(fieldGroup('Language', language));
 
       const parshaWrap = el('div');
-      const select = parshaSelect(existing?.parsha);
+      const select = parshaSelect(prefillSrc?.parsha);
       parshaWrap.appendChild(select);
       form.appendChild(fieldGroup('Parsha', parshaWrap));
 
-      const year = textInput('Issue year / number', existing?.year);
-      form.appendChild(fieldGroup('Year', year));
+      const year = yearInput(prefillSrc?.year);
+      form.appendChild(fieldGroup('Year', year.row));
 
       // PDF file — picking one auto-generates a cover thumbnail from its
       // first page (via pdf.js) and lets the filename be renamed before
@@ -267,12 +393,17 @@ window.MOISDES.adminUpload = (function () {
       });
       thumbNameInput.addEventListener('input', () => { manualThumbFileName = thumbNameInput.value; });
 
-      getExtra = () => ({ title: title.value, category: categoryInput.getValue(), language: language.value, parsha: select.value, year: year.value });
+      getExtra = () => ({ title: title.value, category: categoryInput.getValue(), language: language.value, parsha: select.value, year: year.getValue() });
 
       form._getPdfFile = () => ({ file: pdfFile, name: pdfFileName });
       form._getThumb = () => manualThumbFile
         ? { file: manualThumbFile, name: manualThumbFileName }
         : (autoThumbBlob ? { file: autoThumbBlob, name: 'cover.png' } : null);
+
+    } else if (type === 'simchas') {
+      const text = textarea('Simcha (e.g. names + occasion)', prefillSrc?.text);
+      form.appendChild(fieldGroup('Text', text));
+      getExtra = () => ({ text: text.value });
     }
 
     const submitBtn = el('button', 'btn btn-primary', isEdit ? 'Save changes' : 'Publish');
@@ -289,7 +420,7 @@ window.MOISDES.adminUpload = (function () {
       try {
         const date = datePicker.getIso();
         if (!date) throw new Error('Please choose a date.');
-        const payload = { date, ...getExtra() };
+        const payload = type === 'simchas' ? { date_added: date, ...getExtra() } : { date, ...getExtra() };
 
         if (type === 'pdfs') {
           const { file: pdfFile, name: pdfName } = form._getPdfFile();
@@ -315,6 +446,30 @@ window.MOISDES.adminUpload = (function () {
           payload.folder_url = folder || existing?.folder_url || '';
         }
 
+        if (type === 'events') {
+          const thumb = form._getEventThumb();
+          if (thumb) {
+            const thumbKey = `events/${Date.now()}-thumb-${AF.sanitizeFilename(thumb.name)}`;
+            await api.uploadFile(thumbKey, thumb.file);
+            payload.thumb_url = thumbKey;
+          } else if (isEdit) {
+            payload.thumb_url = existing.thumb_url || '';
+          }
+        }
+
+        if (type === 'videos') {
+          const videoFile = form._getVideoFile();
+          if (videoFile) {
+            const fileKey = `videos/${Date.now()}-${AF.sanitizeFilename(videoFile.name)}`;
+            await api.uploadFile(fileKey, videoFile.file, (frac) => {
+              setStatus(status, `Uploading video (${Math.round(frac * 100)}%)…`);
+            });
+            payload.video_file_url = fileKey;
+          } else if (isEdit) {
+            payload.video_file_url = existing.video_file_url || '';
+          }
+        }
+
         if (isEdit) {
           await api.put(`/api/${type}/${existing.id}`, payload);
           setStatus(status, 'Saved.', true);
@@ -322,7 +477,11 @@ window.MOISDES.adminUpload = (function () {
         } else {
           await api.post(`/api/${type}`, payload);
           setStatus(status, 'Published successfully.', true);
-          buildForm(type, container); // fresh form for the next entry
+          // A modal-driven create (duplicate, or any future opts.onSaved
+          // caller) closes/reloads via the caller; the plain Upload tab
+          // (no onSaved) resets to a fresh form for the next entry.
+          if (opts.onSaved) opts.onSaved();
+          else buildForm(type, container);
         }
       } catch (err) {
         setStatus(status, err.message || 'Something went wrong.', false);

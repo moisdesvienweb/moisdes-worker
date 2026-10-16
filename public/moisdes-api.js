@@ -9,17 +9,26 @@ window.MOISDES = window.MOISDES || {};
 window.MOISDES.api = (function () {
   const TOKEN_KEY = 'moisdes_token';
   const USER_KEY = 'moisdes_user';
+  const PERMS_KEY = 'moisdes_permissions';
 
   function base() { return window.MOISDES.CFG.apiBase; }
   function getToken() { return localStorage.getItem(TOKEN_KEY); }
   function getUser() { try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch (e) { return null; } }
-  function setSession(token, user) {
+  // Per-section {read,write} map for the logged-in user (admin/superadmin
+  // get every section true; an editor gets exactly what was granted).
+  // Only meaningful for hiding/disabling UI — the Worker enforces the
+  // real boundary server-side regardless of what's cached here.
+  function getPermissions() { try { return JSON.parse(localStorage.getItem(PERMS_KEY) || 'null'); } catch (e) { return null; } }
+  function setPermissions(permissions) { localStorage.setItem(PERMS_KEY, JSON.stringify(permissions || {})); }
+  function setSession(token, user, permissions) {
     localStorage.setItem(TOKEN_KEY, token);
     localStorage.setItem(USER_KEY, JSON.stringify(user));
+    if (permissions) setPermissions(permissions);
   }
   function clearSession() {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+    localStorage.removeItem(PERMS_KEY);
   }
 
   async function request(method, path, body) {
@@ -51,8 +60,24 @@ window.MOISDES.api = (function () {
     return data;
   }
 
+  // Retries a presigned PUT a couple of times on a genuine network failure
+  // (dropped connection, brief wifi hiccup) before giving up — the presign
+  // URL is valid for an hour, so re-using it on retry is safe.
+  async function putWithRetry(url, body, attempts = 3) {
+    let lastErr;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        return await fetch(url, { method: 'PUT', body });
+      } catch (networkErr) {
+        lastErr = networkErr;
+        if (i < attempts - 1) await new Promise((r) => setTimeout(r, 800 * (i + 1)));
+      }
+    }
+    throw lastErr;
+  }
+
   return {
-    getToken, getUser, setSession, clearSession,
+    getToken, getUser, setSession, clearSession, getPermissions, setPermissions,
     get: (path) => request('GET', path),
     post: (path, body) => request('POST', path, body || {}),
     put: (path, body) => request('PUT', path, body || {}),
@@ -60,7 +85,7 @@ window.MOISDES.api = (function () {
 
     async login(email, password) {
       const data = await request('POST', '/api/login', { email, password });
-      setSession(data.token, data.user);
+      setSession(data.token, data.user, data.permissions);
       return data.user;
     },
     async logout() {
@@ -71,19 +96,26 @@ window.MOISDES.api = (function () {
 
     // Direct browser -> R2 upload via a Worker-issued presigned URL.
     // Files above MULTIPART_THRESHOLD go through chunked multipart upload
-    // instead of a single PUT, since Cloudflare's proxy caps a single
-    // request's body size well under what a recording or video needs.
+    // instead of a single PUT. A single large PUT has to survive
+    // uninterrupted for however long the whole file takes to transfer —
+    // a real recording (e.g. a ~38MB audio file) took 20-100+ seconds and
+    // hit net::ERR_CONNECTION_RESET on every attempt (confirmed via a HAR
+    // capture). Multipart splits that same file into 10MB chunks, each
+    // independently retried, so a mid-upload connection drop loses one
+    // chunk's progress instead of the whole file. Lowered well below the
+    // old 50MB cutoff so recordings/videos in this size range route
+    // through the more resilient path.
     async uploadFile(key, file, onProgress) {
-      const MULTIPART_THRESHOLD = 50 * 1024 * 1024; // 50MB
+      const MULTIPART_THRESHOLD = 15 * 1024 * 1024; // 15MB
       if (file.size > MULTIPART_THRESHOLD) {
         return this.uploadFileMultipart(key, file, onProgress);
       }
       const { url } = await request('POST', '/api/presign', { key, mime: file.type || 'application/octet-stream' });
       let res;
       try {
-        res = await fetch(url, { method: 'PUT', body: file });
+        res = await putWithRetry(url, file);
       } catch (networkErr) {
-        throw new Error(`Network error PUTting to R2: ${networkErr.message}`);
+        throw new Error(`Network error PUTting to R2: ${networkErr.message} — if this keeps happening, check that the R2 bucket's CORS policy allows PUT from this site's origin.`);
       }
       if (!res.ok) throw new Error(`Upload failed (${res.status})`);
       if (onProgress) onProgress(1);
@@ -104,9 +136,9 @@ window.MOISDES.api = (function () {
           const { url } = await request('POST', '/api/multipart/presign-part', { key, uploadId, partNumber });
           let res;
           try {
-            res = await fetch(url, { method: 'PUT', body: chunk });
+            res = await putWithRetry(url, chunk);
           } catch (networkErr) {
-            throw new Error(`Network error PUTting part ${partNumber}/${totalParts} to R2: ${networkErr.message}`);
+            throw new Error(`Network error PUTting part ${partNumber}/${totalParts} to R2: ${networkErr.message} — if this keeps happening, check that the R2 bucket's CORS policy allows PUT from this site's origin.`);
           }
           if (!res.ok) throw new Error(`Part ${partNumber}/${totalParts} failed (${res.status})`);
           const etag = res.headers.get('ETag');
@@ -123,6 +155,10 @@ window.MOISDES.api = (function () {
     },
 
     r2Url(key) { return `${base()}/api/r2/${key.split('/').map(encodeURIComponent).join('/')}`; },
+
+    async renameFile(oldKey, newKey) {
+      return request('POST', '/api/r2-rename', { oldKey, newKey });
+    },
 
     async listFolder(prefix) {
       if (!prefix) return [];

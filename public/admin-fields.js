@@ -18,8 +18,12 @@ window.MOISDES.adminFields = (function () {
     return e;
   }
 
+  // Blacklist, not whitelist — keeps spaces, Hebrew/Yiddish, accents,
+  // punctuation, parentheses, etc. Only strips characters that would
+  // actually break a URL or an R2/S3 key (path separators, query/hash
+  // markers, control characters).
   function sanitizeFilename(name) {
-    return String(name).replace(/[^A-Za-z0-9_.-]/g, '_').slice(-80);
+    return String(name).replace(/[\\/?#%:*"<>|\x00-\x1F]/g, '_').replace(/\s+/g, ' ').trim().slice(-120) || 'file';
   }
 
   // Walk forward from 1 Tishrei of `hebrewYear` looking for the Shabbat
@@ -264,7 +268,10 @@ window.MOISDES.adminFields = (function () {
   function createGalleryUploader(container, { keyPrefix, existingFolder, accept } = {}) {
     container.innerHTML = '';
     let staged = []; // { file, name }
-    let existingKeys = []; // R2 keys already uploaded
+    // Already-uploaded files. Renaming/reordering these only edits this
+    // local array — nothing hits the network until upload() runs (i.e.
+    // Publish/Save changes), same as staged new files.
+    let existingItems = []; // { originalKey, name }
 
     const existingListEl = el('ul', 'file-list');
     const dropzone = el('div', 'dropzone', 'Drag & drop files here, or click to choose');
@@ -303,26 +310,87 @@ window.MOISDES.adminFields = (function () {
     const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'svg'];
     function isImageName(name) { return IMAGE_EXT.includes(String(name).split('.').pop().toLowerCase()); }
 
+    // The rename input only ever edits the name; the extension is fixed
+    // and re-appended automatically. Without this, renaming a file (e.g.
+    // fixing a typo in a long Hebrew audio-track title) could drop the
+    // ".mp3" by accident — the R2 key still renames "successfully", but
+    // the public site's isAudio()/isImageName() extension check then no
+    // longer recognizes it, so the track silently disappears from the
+    // player despite the file still being right there in R2.
+    function splitExt(name) {
+      const m = String(name).match(/^(.+)\.([^.]+)$/);
+      return m ? { base: m[1], ext: m[2] } : { base: name, ext: '' };
+    }
+
+    // Existing keys look like "prefix/0001-name.ext" — the zero-padded
+    // index is what determines display order, so renaming or reordering
+    // an already-uploaded file means renaming its R2 key in place.
+    function parseKey(key) {
+      const slash = key.lastIndexOf('/');
+      const dir = key.slice(0, slash);
+      const basename = key.slice(slash + 1);
+      const m = basename.match(/^(\d{4})-(.+)$/);
+      return m ? { dir, idx: m[1], name: m[2] } : { dir, idx: null, name: basename };
+    }
+
+    // The key an existing item WOULD have given its current position +
+    // name — only actually renamed on the server at upload() time.
+    function keyFor(item, position) {
+      const { dir } = parseKey(item.originalKey);
+      const idx = String(position + 1).padStart(4, '0');
+      return `${dir}/${idx}-${sanitizeFilename(item.name)}`;
+    }
+
     function renderExisting() {
       existingListEl.innerHTML = '';
-      existingKeys.forEach((key, i) => {
+      existingItems.forEach((item, i) => {
         const li = el('li');
-        if (isImageName(key)) {
+        if (isImageName(item.originalKey)) {
           const thumb = el('img');
-          thumb.src = api.r2Url(key);
+          thumb.src = api.r2Url(item.originalKey);
           thumb.className = 'file-thumb';
           li.appendChild(thumb);
         }
-        const name = el('span', 'fname', key.split('/').pop());
-        li.appendChild(name);
+
+        // Rename is purely local (like staged files) until Publish/Save.
+        // Editable base name only — the extension is fixed (see splitExt).
+        const { base, ext } = splitExt(item.name);
+        const nameInput = el('input');
+        nameInput.type = 'text';
+        nameInput.className = 'fname-input';
+        nameInput.value = base;
+        nameInput.title = 'Rename (applies when you save)';
+        nameInput.addEventListener('input', () => { item.name = ext ? `${nameInput.value}.${ext}` : nameInput.value; });
+        li.appendChild(nameInput);
+        if (ext) li.appendChild(el('span', 'fname-ext', `.${ext}`));
+
+        const up = el('button', '', '&#9650;');
+        up.type = 'button';
+        up.title = 'Move up';
+        up.disabled = i === 0;
+        up.addEventListener('click', () => {
+          if (i > 0) { [existingItems[i - 1], existingItems[i]] = [existingItems[i], existingItems[i - 1]]; renderExisting(); }
+        });
+        const down = el('button', '', '&#9660;');
+        down.type = 'button';
+        down.title = 'Move down';
+        down.disabled = i === existingItems.length - 1;
+        down.addEventListener('click', () => {
+          if (i < existingItems.length - 1) { [existingItems[i + 1], existingItems[i]] = [existingItems[i], existingItems[i + 1]]; renderExisting(); }
+        });
+        li.appendChild(up);
+        li.appendChild(down);
+
+        // Delete is the one immediate/permanent action here — same as
+        // deleting a published post elsewhere in the admin.
         const rm = el('button', '', '&times;');
         rm.type = 'button';
         rm.title = 'Delete uploaded file';
         rm.addEventListener('click', async () => {
           rm.disabled = true;
           try {
-            await api.del('/api/r2-delete', { key });
-            existingKeys.splice(i, 1);
+            await api.del('/api/r2-delete', { key: item.originalKey });
+            existingItems.splice(i, 1);
             renderExisting();
           } catch (e) {
             status.textContent = e.message || 'Could not delete file';
@@ -347,13 +415,16 @@ window.MOISDES.adminFields = (function () {
         }
         // Rename only affects the staged (not-yet-uploaded) file — purely
         // local state until the form's own Publish/Save button uploads it.
+        // Editable base name only — extension fixed, same as existing files.
+        const { base: stagedBase, ext: stagedExt } = splitExt(item.name);
         const nameInput = el('input');
         nameInput.type = 'text';
         nameInput.className = 'fname-input';
-        nameInput.value = item.name;
+        nameInput.value = stagedBase;
         nameInput.title = 'Rename before uploading';
-        nameInput.addEventListener('input', () => { item.name = nameInput.value; });
+        nameInput.addEventListener('input', () => { item.name = stagedExt ? `${nameInput.value}.${stagedExt}` : nameInput.value; });
         li.appendChild(nameInput);
+        if (stagedExt) li.appendChild(el('span', 'fname-ext', `.${stagedExt}`));
 
         const up = el('button', '', '&#9650;');
         up.type = 'button';
@@ -376,10 +447,16 @@ window.MOISDES.adminFields = (function () {
     sortAZ.addEventListener('click', () => { staged.sort((a, b) => a.name.localeCompare(b.name)); renderStaged(); });
     sortZA.addEventListener('click', () => { staged.sort((a, b) => b.name.localeCompare(a.name)); renderStaged(); });
 
+    // upload() awaits this before touching existingItems.length — without
+    // it, saving quickly after opening Edit (before this fetch resolves)
+    // would upload new files starting at index 0001, colliding with and
+    // silently overwriting whichever existing file already sits at that
+    // key in R2 (a PUT to an occupied key just replaces it, no error).
+    let existingLoadPromise = Promise.resolve();
     if (existingFolder) {
       status.textContent = 'Loading existing files…';
-      api.listFolder(existingFolder).then((keys) => {
-        existingKeys = keys;
+      existingLoadPromise = api.listFolder(existingFolder).then((keys) => {
+        existingItems = keys.map((key) => ({ originalKey: key, name: parseKey(key).name }));
         status.textContent = '';
         renderExisting();
       }).catch(() => { status.textContent = ''; });
@@ -396,20 +473,39 @@ window.MOISDES.adminFields = (function () {
     container.appendChild(status);
 
     async function upload(finalPrefix) {
-      if (!staged.length) return existingFolder || finalPrefix;
+      await existingLoadPromise;
       const prefix = existingFolder || finalPrefix || keyPrefix;
-      progress.style.display = 'block';
-      let startIndex = existingKeys.length;
-      for (let i = 0; i < staged.length; i++) {
-        const idx = String(startIndex + i + 1).padStart(4, '0');
-        const key = `${prefix}/${idx}-${sanitizeFilename(staged[i].name)}`;
-        status.textContent = `Uploading ${i + 1} / ${staged.length}…`;
-        status.className = 'status-msg';
-        await api.uploadFile(key, staged[i].file);
-        progressFill.style.width = `${Math.round(((i + 1) / staged.length) * 100)}%`;
+
+      // Apply any pending rename/reorder of existing files first — this
+      // is the point where those local edits finally hit the network.
+      for (let i = 0; i < existingItems.length; i++) {
+        const item = existingItems[i];
+        const newKey = keyFor(item, i);
+        if (newKey !== item.originalKey) {
+          status.textContent = 'Saving file changes…';
+          status.className = 'status-msg';
+          await api.renameFile(item.originalKey, newKey);
+          item.originalKey = newKey;
+        }
       }
-      status.textContent = 'Upload complete.';
-      status.className = 'status-msg ok';
+
+      if (staged.length) {
+        progress.style.display = 'block';
+        const startIndex = existingItems.length;
+        for (let i = 0; i < staged.length; i++) {
+          const idx = String(startIndex + i + 1).padStart(4, '0');
+          const key = `${prefix}/${idx}-${sanitizeFilename(staged[i].name)}`;
+          status.className = 'status-msg';
+          await api.uploadFile(key, staged[i].file, (frac) => {
+            status.textContent = `Uploading file ${i + 1} / ${staged.length} (${Math.round(frac * 100)}%)…`;
+          });
+          progressFill.style.width = `${Math.round(((i + 1) / staged.length) * 100)}%`;
+        }
+        status.textContent = 'Upload complete.';
+        status.className = 'status-msg ok';
+      } else {
+        status.textContent = '';
+      }
       return prefix;
     }
 

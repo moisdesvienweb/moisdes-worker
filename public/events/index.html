@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>מעמדים — מאסדעס וויען</title>
+<title>מעמדים — חצר וויען</title>
 <link rel="icon" href="/logo.avif">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -15,52 +15,69 @@
 
 <header id="moisdes-header">
   <div class="header-inner">
-    <a href="/" class="header-logo"><img src="/logo.avif" alt="מאסדעס וויען"></a>
+    <a href="/" class="header-logo"><img src="/logo.avif" alt="חצר וויען"></a>
     <ul class="header-nav">
+      <li><a href="/">היים בלאט</a></li>
       <li><a href="/blog">בלאג</a></li>
       <li><a href="/posters">מודעות</a></li>
       <li><a href="/events" class="active">מעמדים</a></li>
       <li><a href="/video">ווידיאוס</a></li>
       <li><a href="/pdfs">גליונות</a></li>
+      <li><a href="/calendar">לוח</a></li>
     </ul>
     <form class="header-search" action="/search/" method="get">
       <input type="search" name="q" placeholder="זוכן...">
-      <button type="submit" aria-label="זוכן">&#128269;</button>
+      <button type="submit" aria-label="זוכן"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></button>
     </form>
     <button class="header-burger" id="burger-btn" aria-label="תפריט">&#9776;</button>
   </div>
 </header>
 <div id="moisdes-mobile">
   <button class="mobile-close" id="mobile-close-btn">&#10005;</button>
-  <img src="/logo.avif" alt="מאסדעס וויען">
+  <img src="/logo.avif" alt="חצר וויען">
+  <a href="/">היים בלאט</a>
   <a href="/blog">בלאג</a>
   <a href="/posters">מודעות</a>
   <a href="/events" class="active">מעמדים</a>
   <a href="/video">ווידיאוס</a>
   <a href="/pdfs">גליונות</a>
+  <a href="/calendar">לוח</a>
   <form class="header-search" action="/search/" method="get">
     <input type="search" name="q" placeholder="זוכן...">
-    <button type="submit" aria-label="זוכן">&#128269;</button>
+    <button type="submit" aria-label="זוכן"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></button>
   </form>
+</div>
+
+<div class="ticker-wrap" id="simchas-ticker-wrap" style="display:none">
+  <div class="ticker-track" id="simchas-ticker"></div>
 </div>
 
 <main class="page">
   <h1 class="page-title">מעמדים</h1>
   <div id="tag-filter-banner"></div>
-  <div id="events-list"><p class="state-msg">לאדט...</p></div>
+  <div class="grid" id="events-list"><p class="state-msg">לאדט...</p></div>
 </main>
 
 <footer id="moisdes-footer">
   <div class="footer-inner">
-    <a href="/" class="footer-logo"><img src="/logo.avif" alt="מאסדעס וויען"></a>
+    <a href="/" class="footer-logo"><img src="/logo.avif" alt="חצר וויען"></a>
     <ul class="footer-nav">
+      <li><a href="/">היים בלאט</a></li>
       <li><a href="/blog">בלאג</a></li>
       <li><a href="/posters">מודעות</a></li>
       <li><a href="/events" class="active">מעמדים</a></li>
       <li><a href="/video">ווידיאוס</a></li>
       <li><a href="/pdfs">גליונות</a></li>
+      <li><a href="/calendar">לוח</a></li>
     </ul>
-    <div class="footer-copy">&copy; 2026 Mosdes Vien</div>
+    <div class="footer-actions">
+      <a class="btn btn-sm newsletter-btn" id="newsletter-btn" href="#" target="_blank" rel="noopener" style="display:none">סיינט אייך אויף פאר קהלתינו</a>
+      <a class="btn btn-sm newsletter-btn" id="contact-btn" href="#" style="display:none">קאנטאקט</a>
+    </div>
+    <div class="footer-attribution">
+      <div class="footer-copy">&copy; 2026 Mosdes Vien</div>
+      <a class="powered-by" href="https://everythingshul.com" target="_blank" rel="noopener"><span>Powered by</span><img src="/everythingshul-logo.png" alt="EverythingShul.com"></a>
+    </div>
   </div>
 </footer>
 

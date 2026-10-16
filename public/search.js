@@ -13,6 +13,7 @@
 
   const params = new URLSearchParams(location.search);
   const q = (params.get('q') || '').trim();
+  const tag = (params.get('tag') || '').trim();
   input.value = q;
 
   form.addEventListener('submit', (e) => {
@@ -21,7 +22,14 @@
     location.href = v ? `/search/?q=${encodeURIComponent(v)}` : '/search/';
   });
 
-  if (!q) return;
+  if (!q && !tag) return;
+
+  if (tag) {
+    const banner = document.createElement('div');
+    banner.className = 'tag-filter-banner';
+    banner.innerHTML = `מציג רעזולטאטן פארן טאג: <strong>${util.eh(tag)}</strong> · <a href="/search/">מעק אויס</a>`;
+    resultsEl.parentNode.insertBefore(banner, resultsEl);
+  }
 
   const SOURCES = [
     { type: 'posts', label: 'בלאג', page: '/blog', fields: ['title', 'body', 'tags', 'category'], excerptField: 'body' },
@@ -39,6 +47,7 @@
     return text.length > len ? text.slice(0, len) + '…' : text;
   }
   function matches(item, fields) {
+    if (tag) return (item.tags || '').split(',').map((t) => t.trim()).includes(tag);
     const needle = q.toLowerCase();
     return fields.some((f) => stripHtml(item[f]).toLowerCase().includes(needle));
   }
@@ -49,7 +58,7 @@
     return '';
   }
 
-  resultsEl.innerHTML = '<p class="state-msg">זוכט...</p>';
+  if (!tag) resultsEl.innerHTML = '<p class="state-msg">זוכט...</p>';
 
   try {
     const responses = await Promise.all(SOURCES.map((s) => api.get(`/api/${s.type}`).catch(() => ({ [s.type]: [] }))));
@@ -67,7 +76,10 @@
         const row = document.createElement('a');
         row.className = 'search-result';
         row.style.display = 'block';
-        row.href = `${source.page}#${source.type.slice(0, -1)}-${item.id}`;
+        row.href = source.type === 'posts' ? `/blog/post.html?id=${item.id}`
+          : source.type === 'videos' ? `/video/post.html?id=${item.id}`
+          : source.type === 'events' ? `/events/post.html?id=${item.id}`
+          : `${source.page}#${source.type.slice(0, -1)}-${item.id}`;
         const meta = item.date ? hebrew.isoToHebrewString(item.date) : '';
         row.innerHTML = `
           <div class="search-result-title">${util.eh(titleFor(source, item))}</div>
@@ -79,7 +91,9 @@
     });
 
     if (!totalResults) {
-      resultsEl.innerHTML = `<p class="state-msg">קיין רעזולטאטן נישט געפונען פאר "${util.eh(q)}"</p>`;
+      resultsEl.innerHTML = tag
+        ? `<p class="state-msg">קיין רעזולטאטן נישט געפונען פארן טאג "${util.eh(tag)}"</p>`
+        : `<p class="state-msg">קיין רעזולטאטן נישט געפונען פאר "${util.eh(q)}"</p>`;
     }
   } catch (e) {
     resultsEl.innerHTML = '<p class="state-msg">נישט געקענט זוכן</p>';
