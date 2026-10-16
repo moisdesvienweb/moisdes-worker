@@ -20,16 +20,19 @@
 </head>
 <body>
 <div id="admin-root">
-  <aside class="sidebar">
-    <div class="sidebar-logo"><img src="/logo.avif" alt="Moisdes Vien"></div>
+  <header class="app-header">
+    <div class="app-header-brand"><img src="/logo.avif" alt="Moisdes Vien"><span>Moisdes Vien</span></div>
     <nav class="sidebar-nav">
       <button class="sidebar-link active" data-panel="upload">Upload</button>
       <button class="sidebar-link" data-panel="browse">Browse &amp; Edit</button>
-      <button class="sidebar-link" data-panel="forms">Forms</button>
+      <button class="sidebar-link" data-panel="forms">Forms<span class="nav-badge" id="forms-unread-badge" style="display:none"></span></button>
+      <button class="sidebar-link" data-panel="daf">Daf Calendar</button>
+      <button class="sidebar-link" data-panel="settings">Settings</button>
+      <button class="sidebar-link" data-panel="analytics">Analytics</button>
       <button class="sidebar-link" data-panel="users">Users</button>
-      <button class="sidebar-link sidebar-logout" id="logout-btn">Logout</button>
     </nav>
-  </aside>
+    <button class="sidebar-link sidebar-logout" id="logout-btn">Logout</button>
+  </header>
 
   <main class="admin-main">
 
@@ -42,6 +45,7 @@
         <button class="subtab" data-type="events">Events</button>
         <button class="subtab" data-type="videos">Videos</button>
         <button class="subtab" data-type="pdfs">PDFs</button>
+        <button class="subtab" data-type="simchas">Simchas</button>
       </div>
       <div id="upload-form-container"></div>
     </section>
@@ -55,8 +59,12 @@
         <button class="subtab" data-type="events">Events</button>
         <button class="subtab" data-type="videos">Videos</button>
         <button class="subtab" data-type="pdfs">PDFs</button>
+        <button class="subtab" data-type="simchas">Simchas</button>
       </div>
-      <input type="text" class="filter-input" id="browse-filter" placeholder="Filter...">
+      <div class="browse-toolbar">
+        <input type="text" class="filter-input" id="browse-filter" placeholder="Filter...">
+        <button class="btn btn-sm" id="browse-export-xlsx" type="button">Export XLSX</button>
+      </div>
       <div class="table-wrap"><table id="browse-table"><thead></thead><tbody></tbody></table></div>
     </section>
 
@@ -74,13 +82,56 @@
       </div>
     </section>
 
+    <!-- ===================== DAF CALENDAR ===================== -->
+    <section class="panel" id="panel-daf">
+      <h1>Daf Calendar (ובהם נהגה)</h1>
+      <p class="state-msg">Upload an Excel file with two columns: <strong>date</strong> (YYYY-MM-DD) and <strong>text</strong> (the daf/עמוד for that day). Re-uploading updates any dates already in the file.</p>
+      <input type="file" id="daf-file-input" accept=".xlsx,.xls,.csv">
+      <div class="state-msg" id="daf-upload-msg"></div>
+      <div class="table-wrap"><table id="daf-table"><thead>
+        <tr><th>Date</th><th>Text</th></tr>
+      </thead><tbody></tbody></table></div>
+    </section>
+
+    <!-- ===================== SETTINGS ===================== -->
+    <section class="panel" id="panel-settings">
+      <h1>Settings</h1>
+      <form id="settings-form" class="inline-form" style="flex-direction:column;align-items:flex-start;gap:1rem;max-width:480px">
+        <div class="field-group" style="width:100%">
+          <label>Newsletter signup URL (footer button — leave blank to hide the button)</label>
+          <input type="text" id="settings-newsletter-url" placeholder="https://... (a form link, mailing list, etc.)">
+        </div>
+        <div class="field-group" style="width:100%">
+          <label>Footer buttons (shown in a row next to the newsletter/contact buttons)</label>
+          <div id="footer-buttons-list"></div>
+          <button type="button" class="btn btn-sm" id="footer-buttons-add" style="margin-top:.5rem">+ Add button</button>
+        </div>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </form>
+      <div class="state-msg" id="settings-msg"></div>
+    </section>
+
+    <!-- ===================== ANALYTICS ===================== -->
+    <section class="panel" id="panel-analytics">
+      <h1>Analytics</h1>
+      <div id="analytics-totals" class="analytics-totals"></div>
+      <h2 style="margin-top:2rem">Top pages/items</h2>
+      <div class="table-wrap"><table id="analytics-path-table"><thead>
+        <tr><th>Path</th><th>Kind</th><th>Count</th></tr>
+      </thead><tbody></tbody></table></div>
+      <h2 style="margin-top:2rem">Top shared/labeled</h2>
+      <div class="table-wrap"><table id="analytics-label-table"><thead>
+        <tr><th>Label</th><th>Kind</th><th>Count</th></tr>
+      </thead><tbody></tbody></table></div>
+    </section>
+
     <!-- ===================== USERS ===================== -->
     <section class="panel" id="panel-users">
       <h1>Users</h1>
-      <form id="new-user-form" class="inline-form">
-        <input type="text" id="nu-name" placeholder="Name" required>
-        <input type="email" id="nu-email" placeholder="Email" required>
-        <input type="password" id="nu-password" placeholder="Password" required>
+      <form id="new-user-form" class="inline-form" autocomplete="off">
+        <input type="text" id="nu-name" name="new-user-name" placeholder="Name" autocomplete="off" required>
+        <input type="email" id="nu-email" name="new-user-email" placeholder="Email" autocomplete="off" required>
+        <input type="password" id="nu-password" name="new-user-password" placeholder="Password" autocomplete="new-password" required>
         <select id="nu-role">
           <option value="editor">Editor</option>
           <option value="admin">Admin</option>
@@ -89,7 +140,7 @@
       </form>
       <div class="state-msg" id="users-msg"></div>
       <div class="table-wrap"><table id="users-table"><thead>
-        <tr><th>Name</th><th>Email</th><th>Role</th><th>Active</th><th>Created</th></tr>
+        <tr><th>Name</th><th>Email</th><th>Role</th><th>Active</th><th>Created</th><th>Actions</th></tr>
       </thead><tbody></tbody></table></div>
     </section>
 
@@ -109,10 +160,14 @@
 <script src="/shared-config.js"></script>
 <script src="/hebrew-dates.js"></script>
 <script src="/moisdes-api.js"></script>
+<script src="/richtext.js"></script>
 <script src="/admin-fields.js"></script>
 <script src="/admin-upload.js"></script>
 <script src="/admin-browse.js"></script>
 <script src="/admin-forms.js"></script>
+<script src="/admin-daf.js"></script>
+<script src="/admin-settings.js"></script>
+<script src="/admin-analytics.js"></script>
 <script src="/admin-users.js"></script>
 <script src="/admin.js"></script>
 </body>
