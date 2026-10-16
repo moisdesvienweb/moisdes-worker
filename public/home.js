@@ -174,9 +174,15 @@
         try {
           const Z = window.MOISDES.zmanim;
           const heb = Z.currentHebrewDateDisplay(loc.lat, loc.lon, loc.elevation);
-          const hebcalText = await Z.hebcalDateText(heb.effectiveIso, heb.ohrLyom);
+          // These two network calls don't depend on each other — running
+          // them together instead of one-after-the-other roughly halves
+          // this widget's own network time.
+          const [hebcalText, zmanimResult] = await Promise.all([
+            Z.hebcalDateText(heb.effectiveIso, heb.ohrLyom),
+            Z.computeZmanimWithHebcal(new Date(), loc.lat, loc.lon, loc.elevation, util.localIso()),
+          ]);
           const hebText = hebcalText || heb.text;
-          const { zmanim: z, source } = await Z.computeZmanimWithHebcal(new Date(), loc.lat, loc.lon, loc.elevation, util.localIso());
+          const { zmanim: z, source } = zmanimResult;
           const usedHebcal = source === 'hebcal' || !!hebcalText;
           const rows = [
             ['הנץ החמה', Z.fmtTime(z.sunrise)],
@@ -266,10 +272,20 @@
     }
   }
 
-  // Everything the home page shows runs concurrently; the loading
-  // overlay only lifts once ALL of it — mosaic, zmanim, daf, upcoming —
-  // has actually finished, so nothing pops in after the animation ends.
-  await Promise.all([loadMosaic(), loadZmanim(), loadDaf(), loadUpcoming()]);
+  // Only the main "נייעס" content gates the loading overlay — zmanim,
+  // daf, and upcoming are sidebar/strip widgets that each already have
+  // their own "Loading…" placeholder in the HTML, so there's no reason
+  // to hide the whole page behind the overlay while they're still in
+  // flight. This matters a lot in practice: zmanim specifically waits on
+  // a geolocation request that can take several seconds (or longer, if
+  // the permission prompt sits unanswered) before it even starts its own
+  // network calls — the rest of the page shouldn't be invisible for all
+  // of that. They still run concurrently with the mosaic, just without
+  // blocking it.
+  loadZmanim();
+  loadDaf();
+  loadUpcoming();
+  await loadMosaic();
   if (window.MOISDES.hideLoadingOverlay) window.MOISDES.hideLoadingOverlay();
 
   // Simchas ticker is handled globally by chrome.js (runs on every page).

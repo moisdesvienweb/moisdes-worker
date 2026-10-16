@@ -266,7 +266,12 @@ window.MOISDES.zmanim = (function () {
           .catch(() => {});
       },
       () => cb(BROOKLYN),
-      { timeout: 5000, enableHighAccuracy: true }
+      // Zmanim only need city-level precision (sunrise/sunset barely
+      // shift across a metro area) — enableHighAccuracy:true asks for
+      // GPS-grade positioning, which is measurably slower to resolve for
+      // no real benefit here. Network/wifi-based location is faster and
+      // plenty accurate for this.
+      { timeout: 5000, enableHighAccuracy: false }
     );
   }
 

@@ -605,7 +605,7 @@ window.MOISDES.adminFields = (function () {
 
   function createLanguagePicker(container, initialValue) {
     return createSinglePillPicker(container, {
-      options: ['Yiddish', 'Hebrew', 'English'],
+      options: ['אידיש', 'לשון קודש', 'ענגליש'],
       initial: initialValue,
       placeholder: 'Other language…',
       sort: false,

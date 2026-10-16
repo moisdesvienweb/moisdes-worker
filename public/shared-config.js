@@ -6,7 +6,13 @@
 window.MOISDES = window.MOISDES || {};
 
 window.MOISDES.CFG = {
-  apiBase: 'https://moisdes-worker.moisdesvienweb.workers.dev',
+  // The Worker now serves the whole site (frontend + /api/*) from one
+  // deployment, same-origin with the page itself — so every file/API
+  // link visible to a visitor always matches whatever domain they're
+  // actually on (chatzarvien.org), never an internal
+  // moisdes-worker.<account>.workers.dev address, with no hardcoded
+  // domain to fall out of sync if it ever changes.
+  apiBase: location.origin,
 
   logo: '/logo.avif',
 
