@@ -15,6 +15,12 @@ window.MOISDES.adminFields = (function () {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
     if (html !== undefined) e.innerHTML = html;
+    // A <button> with no explicit type defaults to type="submit" — inside
+    // a <form> (every one of these is), an action button like "sort" or
+    // "remove" built this way silently submits/publishes the whole form
+    // on click. Default to "button" here so that never happens by
+    // accident; a real submit button still opts in with .type = 'submit'.
+    if (tag === 'button') e.type = 'button';
     return e;
   }
 
@@ -182,55 +188,65 @@ window.MOISDES.adminFields = (function () {
 
   // ── TAG PILLS ────────────────────────────────────────────────────
 
+  // Pill-toggle picker (replaces the old "pick from a dropdown" UI):
+  // every known tag — existing (from /api/tags) plus whatever's already
+  // selected plus anything typed in during this session — renders as an
+  // A-Z sorted pill you click to toggle on/off. The text input is only
+  // for adding a genuinely new tag, which immediately becomes a selected
+  // pill too.
   function createTagInput(container, initialCsv) {
     container.innerHTML = '';
-    let tags = (initialCsv || '').split(',').map((t) => t.trim()).filter(Boolean);
+    let selected = (initialCsv || '').split(',').map((t) => t.trim()).filter(Boolean);
+    let allTags = [...selected];
 
     const pillsEl = el('div', 'pills');
     const row = el('div', 'tag-input-row');
     const input = el('input');
     input.type = 'text';
-    input.placeholder = 'Add a tag and press Enter';
-    const select = el('select');
-    select.innerHTML = '<option value="">Existing tags…</option>';
+    input.placeholder = 'Add a new tag and press Enter';
 
     function render() {
       pillsEl.innerHTML = '';
-      tags.forEach((t) => {
-        const pill = el('span', 'pill', `${t} `);
-        const rm = el('button', '', '&times;');
-        rm.type = 'button';
-        rm.addEventListener('click', () => { tags = tags.filter((x) => x !== t); render(); });
-        pill.appendChild(rm);
+      [...new Set(allTags)].sort((a, b) => a.localeCompare(b)).forEach((t) => {
+        const isSelected = selected.includes(t);
+        const pill = el('button', 'pill pill-toggle' + (isSelected ? ' active' : ''), t);
+        pill.addEventListener('click', () => {
+          selected = isSelected ? selected.filter((x) => x !== t) : [...selected, t];
+          render();
+        });
         pillsEl.appendChild(pill);
       });
     }
-    function add(value) {
+    function addNew(value) {
       const v = value.trim();
-      if (v && !tags.includes(v)) tags.push(v);
+      if (!v) return;
+      if (!allTags.includes(v)) allTags.push(v);
+      if (!selected.includes(v)) selected.push(v);
       render();
     }
 
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); add(input.value); input.value = ''; }
+      if (e.key === 'Enter') { e.preventDefault(); addNew(input.value); input.value = ''; }
     });
-    select.addEventListener('change', () => { if (select.value) { add(select.value); select.value = ''; } });
 
     container.appendChild(pillsEl);
     row.appendChild(input);
-    row.appendChild(select);
     container.appendChild(row);
     render();
 
     api.get('/api/tags').then(({ tags: existing }) => {
-      existing.forEach((t) => {
-        const o = el('option', '', t);
-        o.value = t;
-        select.appendChild(o);
-      });
+      existing.forEach((t) => { if (!allTags.includes(t)) allTags.push(t); });
+      render();
     }).catch(() => {});
 
-    return { getValue: () => tags.join(', '), setValue: (csv) => { tags = (csv || '').split(',').map((t) => t.trim()).filter(Boolean); render(); } };
+    return {
+      getValue: () => selected.join(', '),
+      setValue: (csv) => {
+        selected = (csv || '').split(',').map((t) => t.trim()).filter(Boolean);
+        selected.forEach((t) => { if (!allTags.includes(t)) allTags.push(t); });
+        render();
+      },
+    };
   }
 
   // ── CATEGORY INPUT ───────────────────────────────────────────────
@@ -492,15 +508,41 @@ window.MOISDES.adminFields = (function () {
       if (staged.length) {
         progress.style.display = 'block';
         const startIndex = existingItems.length;
-        for (let i = 0; i < staged.length; i++) {
-          const idx = String(startIndex + i + 1).padStart(4, '0');
-          const key = `${prefix}/${idx}-${sanitizeFilename(staged[i].name)}`;
-          status.className = 'status-msg';
-          await api.uploadFile(key, staged[i].file, (frac) => {
-            status.textContent = `Uploading file ${i + 1} / ${staged.length} (${Math.round(frac * 100)}%)…`;
-          });
-          progressFill.style.width = `${Math.round(((i + 1) / staged.length) * 100)}%`;
+        const total = staged.length;
+        // Uploads run with a small concurrency cap instead of one at a
+        // time — key assignment ("0001-name.jpg" etc, by array position)
+        // happens synchronously before any upload starts, so running
+        // several in parallel can't scramble the display order no matter
+        // which one actually finishes first. 4 is comfortably under a
+        // browser's per-origin connection limit (6) while still being a
+        // real speedup over strictly sequential for a multi-file gallery.
+        const fileFrac = new Array(total).fill(0);
+        const updateProgress = () => {
+          const overall = fileFrac.reduce((a, b) => a + b, 0) / total;
+          progressFill.style.width = `${Math.round(overall * 100)}%`;
+          const done = fileFrac.filter((f) => f >= 1).length;
+          status.textContent = `Uploading… ${done}/${total} done (${Math.round(overall * 100)}%)`;
+        };
+        status.className = 'status-msg';
+        updateProgress();
+
+        const CONCURRENCY = 4;
+        let nextIndex = 0;
+        async function worker() {
+          while (nextIndex < total) {
+            const i = nextIndex++;
+            const idx = String(startIndex + i + 1).padStart(4, '0');
+            const key = `${prefix}/${idx}-${sanitizeFilename(staged[i].name)}`;
+            await api.uploadFile(key, staged[i].file, (frac) => {
+              fileFrac[i] = frac;
+              updateProgress();
+            });
+            fileFrac[i] = 1;
+            updateProgress();
+          }
         }
+        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, worker));
+
         status.textContent = 'Upload complete.';
         status.className = 'status-msg ok';
       } else {
@@ -512,5 +554,82 @@ window.MOISDES.adminFields = (function () {
     return { upload, hasStaged: () => staged.length > 0 };
   }
 
-  return { createDatePicker, createTagInput, createCategoryInput, createGalleryUploader, sanitizeFilename, parshaToIso };
+  // ── SINGLE-SELECT PILL PICKER ────────────────────────────────────
+  // Shared shape for "pick one of a known list, or type a new one" —
+  // Language and Parsha both use this. At most one pill is active;
+  // clicking the active pill clears the selection.
+  function createSinglePillPicker(container, { options, initial, placeholder, sort }) {
+    container.innerHTML = '';
+    let allOptions = [...options];
+    let value = initial || '';
+    if (value && !allOptions.includes(value)) allOptions.push(value);
+
+    const pillsEl = el('div', 'pills');
+    const row = el('div', 'tag-input-row');
+    const input = el('input');
+    input.type = 'text';
+    input.placeholder = placeholder || 'Add new and press Enter';
+
+    function render() {
+      pillsEl.innerHTML = '';
+      const list = sort === false ? allOptions : [...allOptions].sort((a, b) => a.localeCompare(b));
+      list.forEach((opt) => {
+        const isSelected = value === opt;
+        const pill = el('button', 'pill pill-toggle' + (isSelected ? ' active' : ''), opt);
+        pill.addEventListener('click', () => { value = isSelected ? '' : opt; render(); });
+        pillsEl.appendChild(pill);
+      });
+    }
+    function addNew(v) {
+      const t = v.trim();
+      if (!t) return;
+      if (!allOptions.includes(t)) allOptions.push(t);
+      value = t;
+      render();
+    }
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); addNew(input.value); input.value = ''; }
+    });
+
+    container.appendChild(pillsEl);
+    row.appendChild(input);
+    container.appendChild(row);
+    render();
+
+    return {
+      getValue: () => value,
+      setValue: (v) => { value = v || ''; if (value && !allOptions.includes(value)) allOptions.push(value); render(); },
+      addOptions: (opts) => { (opts || []).forEach((o) => { if (o && !allOptions.includes(o)) allOptions.push(o); }); render(); },
+    };
+  }
+
+  function createLanguagePicker(container, initialValue) {
+    return createSinglePillPicker(container, {
+      options: ['Yiddish', 'Hebrew', 'English'],
+      initial: initialValue,
+      placeholder: 'Other language…',
+      sort: false,
+    });
+  }
+
+  // Standard 54 parshiyot (Torah-reading order, combined-reading names
+  // where applicable — same as the public-site parsha logic) plus
+  // whatever's been added beyond that via /api/parshiyot-custom.
+  function createParshaPicker(container, initialValue) {
+    const CFG = window.MOISDES.CFG;
+    const standard = (CFG.parshiyot || []).map((p) => CFG.combined[p] || p);
+    const picker = createSinglePillPicker(container, {
+      options: standard,
+      initial: initialValue,
+      placeholder: 'Add a new parsha label…',
+      sort: false,
+    });
+    api.get('/api/parshiyot-custom').then(({ parshiyot }) => picker.addOptions(parshiyot)).catch(() => {});
+    return picker;
+  }
+
+  return {
+    createDatePicker, createTagInput, createCategoryInput, createGalleryUploader,
+    createLanguagePicker, createParshaPicker, sanitizeFilename, parshaToIso,
+  };
 })();

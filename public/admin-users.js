@@ -69,6 +69,7 @@ window.MOISDES.adminUsers = (function () {
       table.appendChild(tbody);
 
       const saveBtn = document.createElement('button');
+      saveBtn.type = 'button';
       saveBtn.className = 'btn btn-primary btn-sm';
       saveBtn.textContent = 'Save permissions';
       saveBtn.style.marginTop = '.6rem';
@@ -137,12 +138,14 @@ window.MOISDES.adminUsers = (function () {
         const actionsTd = document.createElement('td');
         if (u.role === 'editor') {
           const permBtn = document.createElement('button');
+          permBtn.type = 'button';
           permBtn.className = 'btn btn-sm';
           permBtn.textContent = 'Permissions';
           permBtn.addEventListener('click', () => openPermissions(u, tr));
           actionsTd.appendChild(permBtn);
         }
         const pwBtn = document.createElement('button');
+        pwBtn.type = 'button';
         pwBtn.className = 'btn btn-sm';
         pwBtn.textContent = 'Set password';
         pwBtn.style.marginInlineStart = u.role === 'editor' ? '.4rem' : '0';

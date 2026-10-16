@@ -8,12 +8,15 @@ window.MOISDES = window.MOISDES || {};
 window.MOISDES.adminUpload = (function () {
   const api = window.MOISDES.api;
   const AF = window.MOISDES.adminFields;
-  const CFG = window.MOISDES.CFG;
 
   function el(tag, cls, html) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
     if (html !== undefined) e.innerHTML = html;
+    // See admin-fields.js's el() for why: a type-less <button> defaults
+    // to submit and silently fires the surrounding <form> on click. The
+    // one real submit button (below) explicitly opts back in.
+    if (tag === 'button') e.type = 'button';
     return e;
   }
   function fieldGroup(labelText, inputEl) {
@@ -50,17 +53,8 @@ window.MOISDES.adminUpload = (function () {
     node.className = 'status-msg' + (ok === true ? ' ok' : ok === false ? ' err' : '');
   }
 
-  function parshaSelect(value) {
-    const s = el('select');
-    (CFG.parshiyot || []).forEach((p) => {
-      const name = CFG.combined[p] || p;
-      const o = el('option', '', name);
-      o.value = name;
-      if (name === value) o.selected = true;
-      s.appendChild(o);
-    });
-    return s;
-  }
+  // Parsha field uses AF.createParshaPicker (pill-select + add-new) now —
+  // see admin-fields.js.
 
   // Same free-text-input + "pick an existing one" dropdown pattern as
   // AF.createCategoryInput, but for PDF issue years — existing years are
@@ -127,8 +121,12 @@ window.MOISDES.adminUpload = (function () {
       }
     });
 
+    // PDFs in create mode use a per-file date picker inside each batch
+    // card instead (see below) — one shared date wouldn't make sense
+    // once multiple PDFs, each wanting its own date, are involved.
+    const isPdfBatchCreate = type === 'pdfs' && !isEdit;
     const datePickerWrap = el('div');
-    form.appendChild(fieldGroup(type === 'simchas' ? 'Date added' : 'Date', datePickerWrap));
+    if (!isPdfBatchCreate) form.appendChild(fieldGroup(type === 'simchas' ? 'Date added' : 'Date', datePickerWrap));
     const datePicker = AF.createDatePicker(datePickerWrap, prefillSrc ? (prefillSrc.date || prefillSrc.date_added || '').slice(0, 10) : '');
 
     let getExtra;
@@ -157,15 +155,14 @@ window.MOISDES.adminUpload = (function () {
 
     } else if (type === 'posters') {
       const parshaWrap = el('div');
-      const select = parshaSelect(prefillSrc?.parsha);
-      parshaWrap.appendChild(select);
+      const parshaPicker = AF.createParshaPicker(parshaWrap, prefillSrc?.parsha);
       form.appendChild(fieldGroup('Parsha', parshaWrap));
 
       const galleryWrap = el('div');
       form.appendChild(fieldGroup('Images', galleryWrap));
       gallery = AF.createGalleryUploader(galleryWrap, { accept: 'image/*', existingFolder: existing?.folder_url });
 
-      getExtra = () => ({ parsha: select.value });
+      getExtra = () => ({ parsha: parshaPicker.getValue() });
 
     } else if (type === 'events') {
       const title = textInput('Title', prefillSrc?.title);
@@ -282,7 +279,7 @@ window.MOISDES.adminUpload = (function () {
       getExtra = () => ({ title: title.value, location: location.value, category: categoryInput.getValue(), description: descriptionField.editor.getHtml(), video_url: videoUrl.value, tags: tagInput.getValue() });
       form._getVideoFile = () => (videoFile ? { file: videoFile, name: videoFileName } : null);
 
-    } else if (type === 'pdfs') {
+    } else if (type === 'pdfs' && isEdit) {
       const title = textInput('Title', prefillSrc?.title);
       form.appendChild(fieldGroup('Title', title));
 
@@ -290,12 +287,12 @@ window.MOISDES.adminUpload = (function () {
       form.appendChild(fieldGroup('Category', catWrap));
       categoryInput = AF.createCategoryInput(catWrap, prefillSrc?.category);
 
-      const language = textInput('e.g. Yiddish / Hebrew / English', prefillSrc?.language);
-      form.appendChild(fieldGroup('Language', language));
+      const languageWrap = el('div');
+      const languagePicker = AF.createLanguagePicker(languageWrap, prefillSrc?.language);
+      form.appendChild(fieldGroup('Language', languageWrap));
 
       const parshaWrap = el('div');
-      const select = parshaSelect(prefillSrc?.parsha);
-      parshaWrap.appendChild(select);
+      const parshaPicker = AF.createParshaPicker(parshaWrap, prefillSrc?.parsha);
       form.appendChild(fieldGroup('Parsha', parshaWrap));
 
       const year = yearInput(prefillSrc?.year);
@@ -319,7 +316,7 @@ window.MOISDES.adminUpload = (function () {
       pdfNameWrap.style.display = 'none';
       pdfNameWrap.appendChild(pdfNameInput);
       pdfFileWrap.appendChild(pdfNameWrap);
-      form.appendChild(fieldGroup(isEdit ? 'Replace PDF file (optional)' : 'PDF file', pdfFileWrap));
+      form.appendChild(fieldGroup('Replace PDF file (optional)', pdfFileWrap));
 
       const thumbPreviewWrap = el('div');
       thumbPreviewWrap.style.margin = '0 0 .75rem';
@@ -380,7 +377,7 @@ window.MOISDES.adminUpload = (function () {
       thumbNameWrap.style.display = 'none';
       thumbNameWrap.appendChild(thumbNameInput);
       thumbWrap.appendChild(thumbNameWrap);
-      form.appendChild(fieldGroup(isEdit ? 'Replace thumbnail (optional)' : 'Cover thumbnail (optional — auto-generated if left blank)', thumbWrap));
+      form.appendChild(fieldGroup('Replace thumbnail (optional)', thumbWrap));
 
       thumbInput.addEventListener('change', () => {
         const file = thumbInput.files[0];
@@ -393,12 +390,145 @@ window.MOISDES.adminUpload = (function () {
       });
       thumbNameInput.addEventListener('input', () => { manualThumbFileName = thumbNameInput.value; });
 
-      getExtra = () => ({ title: title.value, category: categoryInput.getValue(), language: language.value, parsha: select.value, year: year.getValue() });
+      getExtra = () => ({ title: title.value, category: categoryInput.getValue(), language: languagePicker.getValue(), parsha: parshaPicker.getValue(), year: year.getValue() });
 
       form._getPdfFile = () => ({ file: pdfFile, name: pdfFileName });
       form._getThumb = () => manualThumbFile
         ? { file: manualThumbFile, name: manualThumbFileName }
         : (autoThumbBlob ? { file: autoThumbBlob, name: 'cover.png' } : null);
+
+    } else if (type === 'pdfs' && !isEdit) {
+      // Batch create — pick any number of PDFs; each gets its own card
+      // below with fully independent date/title/category/language/
+      // parsha/year/thumbnail, and becomes its own separate post. A
+      // single file still works fine here — it's just a batch of one.
+      const cards = [];
+
+      const pickerWrap = el('div');
+      const filesInput = el('input');
+      filesInput.type = 'file';
+      filesInput.accept = 'application/pdf';
+      filesInput.multiple = true;
+      pickerWrap.appendChild(filesInput);
+      form.appendChild(fieldGroup('PDF file(s) — pick one or more; each becomes its own post below', pickerWrap));
+
+      const cardsWrap = el('div');
+      form.appendChild(cardsWrap);
+
+      function buildPdfCard(file) {
+        const card = el('div', 'pdf-batch-card');
+        const cardHead = el('div', 'pdf-batch-card-head');
+        cardHead.textContent = file.name;
+        card.appendChild(cardHead);
+
+        const dateWrap = el('div');
+        card.appendChild(fieldGroup('Date', dateWrap));
+        const cardDatePicker = AF.createDatePicker(dateWrap, '');
+
+        const titleInput = textInput('Title', file.name.replace(/\.pdf$/i, ''));
+        card.appendChild(fieldGroup('Title', titleInput));
+
+        const catWrap = el('div');
+        card.appendChild(fieldGroup('Category', catWrap));
+        const cardCategoryInput = AF.createCategoryInput(catWrap, '');
+
+        const languageWrap = el('div');
+        card.appendChild(fieldGroup('Language', languageWrap));
+        const cardLanguagePicker = AF.createLanguagePicker(languageWrap, '');
+
+        const parshaWrap = el('div');
+        card.appendChild(fieldGroup('Parsha', parshaWrap));
+        const cardParshaPicker = AF.createParshaPicker(parshaWrap, '');
+
+        const cardYear = yearInput('');
+        card.appendChild(fieldGroup('Year', cardYear.row));
+
+        let autoThumbBlob = null, manualThumbFile = null, manualThumbFileName = '';
+        const thumbPreviewWrap = el('div');
+        thumbPreviewWrap.style.margin = '0 0 .6rem';
+        card.appendChild(thumbPreviewWrap);
+        function renderThumbPreview(src, label) {
+          thumbPreviewWrap.innerHTML = '';
+          if (src) {
+            const img = el('img');
+            img.src = src;
+            img.style.cssText = 'max-width:100px;border-radius:4px;margin-bottom:.3rem;display:block';
+            thumbPreviewWrap.appendChild(img);
+          }
+          if (label) thumbPreviewWrap.appendChild(el('div', 'state-msg', label));
+        }
+        if (window.pdfjsLib) {
+          renderThumbPreview(null, 'Generating thumbnail…');
+          file.arrayBuffer().then(async (buf) => {
+            try {
+              const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+              const page = await pdf.getPage(1);
+              const viewport = page.getViewport({ scale: 1.2 });
+              const canvas = document.createElement('canvas');
+              canvas.width = viewport.width;
+              canvas.height = viewport.height;
+              await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+              autoThumbBlob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+              if (!manualThumbFile) renderThumbPreview(canvas.toDataURL('image/png'), 'Auto-generated (replace below if you’d like).');
+            } catch (e) {
+              renderThumbPreview(null, 'Could not auto-generate a thumbnail — pick one manually below.');
+            }
+          });
+        } else {
+          renderThumbPreview(null, 'Thumbnail auto-generation unavailable — pick one manually below.');
+        }
+
+        const thumbInput = el('input');
+        thumbInput.type = 'file';
+        thumbInput.accept = 'image/*';
+        card.appendChild(fieldGroup('Cover thumbnail (optional)', thumbInput));
+        thumbInput.addEventListener('change', () => {
+          const f = thumbInput.files[0];
+          if (!f) return;
+          manualThumbFile = f;
+          manualThumbFileName = f.name;
+          renderThumbPreview(URL.createObjectURL(f), 'Manually chosen thumbnail.');
+        });
+
+        const cardStatus = statusEl();
+        card.appendChild(cardStatus);
+
+        const removeBtn = el('button', 'btn btn-sm btn-danger', 'Remove this file');
+        removeBtn.addEventListener('click', () => {
+          const idx = cards.indexOf(entry);
+          if (idx !== -1) cards.splice(idx, 1);
+          card.remove();
+        });
+        card.appendChild(removeBtn);
+
+        const entry = {
+          card, cardStatus,
+          getPayload: () => ({
+            date: cardDatePicker.getIso(),
+            title: titleInput.value,
+            category: cardCategoryInput.getValue(),
+            language: cardLanguagePicker.getValue(),
+            parsha: cardParshaPicker.getValue(),
+            year: cardYear.getValue(),
+          }),
+          getPdfFile: () => ({ file, name: file.name }),
+          getThumb: () => manualThumbFile
+            ? { file: manualThumbFile, name: manualThumbFileName }
+            : (autoThumbBlob ? { file: autoThumbBlob, name: 'cover.png' } : null),
+        };
+        return entry;
+      }
+
+      filesInput.addEventListener('change', () => {
+        Array.from(filesInput.files).forEach((file) => {
+          const entry = buildPdfCard(file);
+          cards.push(entry);
+          cardsWrap.appendChild(entry.card);
+        });
+        filesInput.value = ''; // lets the same file be re-added if removed, and keeps already-built cards when adding more
+      });
+
+      form._pdfCards = cards;
 
     } else if (type === 'simchas') {
       const text = textarea('Simcha (e.g. names + occasion)', prefillSrc?.text);
@@ -415,6 +545,51 @@ window.MOISDES.adminUpload = (function () {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       submitBtn.disabled = true;
+
+      // Batch PDF create — entirely separate flow: one card per file,
+      // each uploaded and published independently (in parallel) instead
+      // of the single shared date/payload path below.
+      if (type === 'pdfs' && !isEdit) {
+        if (!form._pdfCards.length) {
+          setStatus(status, 'Please choose at least one PDF file.', false);
+          submitBtn.disabled = false;
+          return;
+        }
+        setStatus(status, `Publishing ${form._pdfCards.length} PDF${form._pdfCards.length > 1 ? 's' : ''}…`);
+        const results = await Promise.all(form._pdfCards.map(async (entry) => {
+          try {
+            const payload = entry.getPayload();
+            if (!payload.date) throw new Error('Please choose a date for every file.');
+            const { file: pdfFile, name: pdfName } = entry.getPdfFile();
+            const thumb = entry.getThumb();
+            const pdfKey = `pdfs/${Date.now()}-${AF.sanitizeFilename(pdfName)}`;
+            const thumbKey = thumb ? `pdfs/${Date.now()}-thumb-${AF.sanitizeFilename(thumb.name)}` : null;
+            setStatus(entry.cardStatus, 'Uploading…');
+            await Promise.all([
+              api.uploadFile(pdfKey, pdfFile),
+              thumbKey ? api.uploadFile(thumbKey, thumb.file) : null,
+            ]);
+            payload.pdf_url = pdfKey;
+            payload.thumb_url = thumbKey || undefined;
+            await api.post('/api/pdfs', payload);
+            setStatus(entry.cardStatus, 'Published.', true);
+            return { ok: true };
+          } catch (err) {
+            setStatus(entry.cardStatus, err.message || 'Failed.', false);
+            return { ok: false };
+          }
+        }));
+        const okCount = results.filter((r) => r.ok).length;
+        if (okCount === form._pdfCards.length) {
+          setStatus(status, `Published ${okCount} PDF${okCount > 1 ? 's' : ''} successfully.`, true);
+          buildForm(type, container);
+        } else {
+          setStatus(status, `Published ${okCount} of ${form._pdfCards.length} — see each card above for what failed.`, false);
+          submitBtn.disabled = false;
+        }
+        return;
+      }
+
       setStatus(status, 'Saving…');
 
       try {
@@ -426,20 +601,16 @@ window.MOISDES.adminUpload = (function () {
           const { file: pdfFile, name: pdfName } = form._getPdfFile();
           const thumb = form._getThumb();
           if (!isEdit && !pdfFile) throw new Error('Please choose a PDF file.');
-          if (pdfFile) {
-            const pdfKey = `pdfs/${Date.now()}-${AF.sanitizeFilename(pdfName || pdfFile.name)}`;
-            await api.uploadFile(pdfKey, pdfFile);
-            payload.pdf_url = pdfKey;
-          } else if (isEdit) {
-            payload.pdf_url = existing.pdf_url || '';
-          }
-          if (thumb) {
-            const thumbKey = `pdfs/${Date.now()}-thumb-${AF.sanitizeFilename(thumb.name)}`;
-            await api.uploadFile(thumbKey, thumb.file);
-            payload.thumb_url = thumbKey;
-          } else if (isEdit) {
-            payload.thumb_url = existing.thumb_url || '';
-          }
+          const pdfKey = pdfFile ? `pdfs/${Date.now()}-${AF.sanitizeFilename(pdfName || pdfFile.name)}` : null;
+          const thumbKey = thumb ? `pdfs/${Date.now()}-thumb-${AF.sanitizeFilename(thumb.name)}` : null;
+          // The PDF and its thumbnail are independent uploads — run them
+          // together instead of waiting on one before starting the other.
+          await Promise.all([
+            pdfKey ? api.uploadFile(pdfKey, pdfFile) : null,
+            thumbKey ? api.uploadFile(thumbKey, thumb.file) : null,
+          ]);
+          payload.pdf_url = pdfKey || (isEdit ? existing.pdf_url || '' : undefined);
+          payload.thumb_url = thumbKey || (isEdit ? existing.thumb_url || '' : undefined);
         } else if (gallery) {
           const prefix = existing?.folder_url || `${type}/${Date.now()}`;
           const folder = await gallery.upload(prefix);

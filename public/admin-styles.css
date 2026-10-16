@@ -159,9 +159,28 @@ h2 { font-size: 1.05rem; margin: 0 0 .75rem; }
 }
 .pill button { background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: .85rem; padding: 0; }
 .pill button:hover { color: var(--danger); }
+/* Toggleable pill (tags/language/parsha pickers) — a plain <button class="pill">
+   that's either on or off, rather than a span+remove-× composite. */
+.pill-toggle {
+  cursor: pointer; color: var(--ink-soft); transition: background .1s, color .1s, border-color .1s;
+}
+.pill-toggle:hover { border-color: var(--accent); }
+.pill-toggle.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .tag-input-row { display: flex; gap: .5rem; }
 .tag-input-row input { flex: 1; }
 .tag-input-row select { width: 160px; }
+
+/* ── BATCH PDF UPLOAD CARDS ───────────────────────────────────────── */
+
+.pdf-batch-card {
+  border: 1px solid var(--line); border-radius: 8px; padding: 1.1rem 1.3rem;
+  margin-bottom: 1.25rem; background: var(--panel-2);
+}
+.pdf-batch-card-head {
+  font-weight: 700; font-size: .92rem; margin-bottom: .9rem;
+  padding-bottom: .6rem; border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
 
 /* ── DROPZONE / FILE LIST ───────────────────────────────────────── */
 
@@ -241,6 +260,8 @@ tr:hover td { background: var(--panel-2); }
 
 .response-row-unread { font-weight: 700; }
 .response-read-toggle { white-space: nowrap; }
+.flex-between { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .75rem; }
+.flex-between h2 { margin: 0; }
 .forms-detail-col { flex: 1; min-width: 0; }
 
 .field-palette { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
@@ -262,3 +283,11 @@ tr:hover td { background: var(--panel-2); }
 }
 .analytics-stat-num { font-size: 1.8rem; font-weight: 700; color: var(--accent); }
 .analytics-stat-label { font-size: .78rem; color: var(--ink-faint); text-transform: capitalize; margin-top: .2rem; }
+
+.chart-row { display: flex; flex-wrap: wrap; gap: 1.25rem; margin: 1.5rem 0; }
+.chart-card {
+  flex: 1 1 320px; max-width: 420px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 1.25rem 1.4rem;
+}
+.chart-card h2 { margin: 0 0 1rem; font-size: .95rem; }
+.chart-card canvas { max-height: 240px; }

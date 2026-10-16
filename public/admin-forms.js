@@ -31,6 +31,9 @@ window.MOISDES.adminForms = (function () {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
     if (html !== undefined) e.innerHTML = html;
+    // See admin-fields.js's el() for why: a type-less <button> defaults
+    // to submit and silently fires the surrounding <form> on click.
+    if (tag === 'button') e.type = 'button';
     return e;
   }
   function escapeHtml(s) {
@@ -408,46 +411,105 @@ window.MOISDES.adminForms = (function () {
   }
 
   // Same detached-build pattern as buildFieldBuilderSection above.
+  // Deletes one response — distinct from deleting the whole form. Updates
+  // the sidebar/nav unread badges too if the removed response was unread.
+  async function deleteResponse(form, r) {
+    if (!confirm('Delete this response? This cannot be undone.')) return;
+    try {
+      await api.del(`/api/forms/${form.id}/responses/${r.id}`);
+      if (!r.read_at) {
+        const listForm = forms.find((f) => f.id === form.id);
+        if (listForm) { listForm.unread_count = Math.max(0, (listForm.unread_count || 0) - 1); renderFormsList(); }
+      }
+    } catch (e) {
+      alert(e.message || 'Could not delete response.');
+      throw e;
+    }
+  }
+
   async function buildResponsesSection(form, writable) {
     const wrap = el('div', 'response-table-wrap');
-    wrap.appendChild(el('h2', '', 'Responses'));
+    const headRow = el('div', 'flex-between');
+    const heading = el('h2', '', `Responses (0)`);
+    headRow.appendChild(heading);
     const exportBtn = el('button', 'btn', 'Export XLSX');
-    wrap.appendChild(exportBtn);
+    headRow.appendChild(exportBtn);
+    wrap.appendChild(headRow);
+
+    const filterInput = el('input');
+    filterInput.type = 'text';
+    filterInput.placeholder = 'Search responses…';
+    filterInput.style.marginBottom = '.75rem';
+    filterInput.style.maxWidth = '320px';
+    wrap.appendChild(filterInput);
+
     const table = el('table');
     const tableWrap = el('div', 'table-wrap');
     tableWrap.appendChild(table);
     wrap.appendChild(tableWrap);
 
     let responseFields = [], responseRows = [];
-    try {
-      const data = await api.get(`/api/forms/${form.id}/responses`);
-      responseFields = data.fields;
-      responseRows = data.responses;
+
+    // Plain client-side substring match across the submitted date and
+    // every visible field's answer — these response tables are rarely
+    // more than a few hundred rows, so no need for a server round-trip
+    // per keystroke.
+    function renderTable() {
+      const q = filterInput.value.trim().toLowerCase();
+      const filtered = !q ? responseRows : responseRows.filter((r) =>
+        r.submitted_at.toLowerCase().includes(q) ||
+        responseFields.some((f) => String(r.answers[f.id] || '').toLowerCase().includes(q))
+      );
+      heading.textContent = `Responses (${responseRows.length})`;
 
       const thead = el('thead');
-      thead.innerHTML = `<tr><th>Submitted</th>${responseFields.map((f) => `<th>${escapeHtml(f.label)}</th>`).join('')}${writable ? '<th>Read</th>' : ''}</tr>`;
+      thead.innerHTML = `<tr><th>Submitted</th>${responseFields.map((f) => `<th>${escapeHtml(f.label)}</th>`).join('')}${writable ? '<th>Read</th><th></th>' : ''}</tr>`;
       const tbody = el('tbody');
-      if (!responseRows.length) {
-        tbody.innerHTML = `<tr><td colspan="${responseFields.length + 1}">No responses yet.</td></tr>`;
+      const colCount = responseFields.length + 1 + (writable ? 2 : 0);
+      if (!filtered.length) {
+        tbody.innerHTML = `<tr><td colspan="${colCount}">${responseRows.length ? 'No responses match your search.' : 'No responses yet.'}</td></tr>`;
       }
-      responseRows.forEach((r) => {
+      filtered.forEach((r) => {
         const tr = el('tr', r.read_at ? '' : 'response-row-unread');
         tr.innerHTML = `<td>${escapeHtml(r.submitted_at)}</td>` +
           responseFields.map((f) => `<td class="wrap">${escapeHtml(r.answers[f.id] || '')}</td>`).join('');
         if (writable) {
-          const td = el('td', 'response-read-toggle');
-          const btn = el('button', 'btn btn-sm', r.read_at ? 'Mark unread' : 'Mark read');
-          btn.addEventListener('click', () => toggleResponseRead(form, r, tr, btn));
-          td.appendChild(btn);
-          tr.appendChild(td);
+          const readTd = el('td', 'response-read-toggle');
+          const readBtn = el('button', 'btn btn-sm', r.read_at ? 'Mark unread' : 'Mark read');
+          readBtn.addEventListener('click', () => toggleResponseRead(form, r, tr, readBtn));
+          readTd.appendChild(readBtn);
+          tr.appendChild(readTd);
+
+          const delTd = el('td');
+          const delBtn = el('button', 'btn btn-sm btn-danger', 'Delete');
+          delBtn.addEventListener('click', async () => {
+            delBtn.disabled = true;
+            try {
+              await deleteResponse(form, r);
+              responseRows = responseRows.filter((row) => row.id !== r.id);
+              renderTable();
+            } catch (e) { delBtn.disabled = false; }
+          });
+          delTd.appendChild(delBtn);
+          tr.appendChild(delTd);
         }
         tbody.appendChild(tr);
       });
+      table.innerHTML = '';
       table.appendChild(thead);
       table.appendChild(tbody);
+    }
+
+    try {
+      const data = await api.get(`/api/forms/${form.id}/responses`);
+      responseFields = data.fields;
+      responseRows = data.responses;
+      renderTable();
     } catch (e) {
       table.innerHTML = `<tbody><tr><td>${escapeHtml(e.message || 'Failed to load responses')}</td></tr></tbody>`;
     }
+
+    filterInput.addEventListener('input', renderTable);
 
     exportBtn.addEventListener('click', () => {
       if (!window.XLSX) { alert('Export library did not load.'); return; }

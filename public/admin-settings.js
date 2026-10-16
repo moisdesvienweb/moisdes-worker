@@ -18,6 +18,9 @@ window.MOISDES.adminSettings = (function () {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
     if (html !== undefined) e.innerHTML = html;
+    // See admin-fields.js's el() for why: a type-less <button> defaults
+    // to submit and silently fires the surrounding <form> on click.
+    if (tag === 'button') e.type = 'button';
     return e;
   }
 

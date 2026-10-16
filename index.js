@@ -382,6 +382,16 @@ async function ensureSettingsTable(env) {
   )`).run();
 }
 
+// Parshiyot beyond the standard 54 baked into the frontend's CFG.parshiyot
+// (shared-config.js) — e.g. a combined-reading label an editor wants as
+// its own pill. Merged with the standard list client-side; this table
+// only needs to hold the extras.
+async function ensureCustomParshiyotTable(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS custom_parshiyot (
+    name TEXT PRIMARY KEY
+  )`).run();
+}
+
 async function ensureAnalyticsTable(env) {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS analytics_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -420,6 +430,7 @@ async function ensureAllTables(env) {
   await ensurePermissionsTable(env);
   await ensureEmailsTable(env);
   await ensurePasswordResetsTable(env);
+  await ensureCustomParshiyotTable(env);
   migrated = true;
 }
 
@@ -673,6 +684,10 @@ async function saveNewTaxonomy(body, env) {
     await env.DB.prepare('INSERT OR IGNORE INTO categories (name) VALUES (?)')
       .bind(String(body.category).trim()).run().catch(() => {});
   }
+  if (body.parsha) {
+    await env.DB.prepare('INSERT OR IGNORE INTO custom_parshiyot (name) VALUES (?)')
+      .bind(String(body.parsha).trim()).run().catch(() => {});
+  }
 }
 
 const ORDER_COLUMN = { simchas: 'date_added' };
@@ -757,6 +772,11 @@ async function handleTags({ env }) {
 async function handleCategories({ env }) {
   const { results } = await env.DB.prepare('SELECT name FROM categories ORDER BY name').all();
   return json({ categories: results.map((r) => r.name) });
+}
+
+async function handleCustomParshiyot({ env }) {
+  const { results } = await env.DB.prepare('SELECT name FROM custom_parshiyot ORDER BY name').all();
+  return json({ parshiyot: results.map((r) => r.name) });
 }
 
 // ── HANDLERS: site settings ──────────────────────────────────────────
@@ -1551,6 +1571,19 @@ async function handleMarkResponseRead({ match, request, env, user }) {
   return json({ ok: true });
 }
 
+// Deletes one submitted response — distinct from handleDeleteForm, which
+// soft-deletes the whole form. This only removes the one logged
+// submission row (and its answers); the form itself and every other
+// response are untouched.
+async function handleDeleteResponse({ match, env, user }) {
+  await requireSection(env, user, 'forms', 'write');
+  const formId = Number(match[1]);
+  const responseId = Number(match[2]);
+  await env.DB.prepare('DELETE FROM form_answers WHERE response_id = ?').bind(responseId).run();
+  await env.DB.prepare('DELETE FROM form_responses WHERE id = ? AND form_id = ?').bind(responseId, formId).run();
+  return json({ ok: true });
+}
+
 // ── ROUTER ────────────────────────────────────────────────────────────
 
 const routes = [
@@ -1568,6 +1601,7 @@ const routes = [
   ['PUT', /^\/api\/users\/(\d+)\/password$/, handleSetUserPassword],
   ['GET', /^\/api\/tags$/, handleTags],
   ['GET', /^\/api\/categories$/, handleCategories],
+  ['GET', /^\/api\/parshiyot-custom$/, handleCustomParshiyot],
   ['GET', /^\/api\/r2-list$/, handleR2List],
   ['DELETE', /^\/api\/r2-delete$/, handleR2Delete],
   ['POST', /^\/api\/r2-rename$/, handleR2Rename],
@@ -1586,6 +1620,7 @@ const routes = [
   ['POST', /^\/api\/forms\/(\d+)\/fields$/, handleSaveFields],
   ['GET', /^\/api\/forms\/(\d+)\/responses$/, handleFormResponses],
   ['PUT', /^\/api\/forms\/(\d+)\/responses\/(\d+)\/read$/, handleMarkResponseRead],
+  ['DELETE', /^\/api\/forms\/(\d+)\/responses\/(\d+)$/, handleDeleteResponse],
   ['PUT', /^\/api\/forms\/(\d+)$/, handleUpdateForm],
   ['DELETE', /^\/api\/forms\/(\d+)$/, handleDeleteForm],
   ['GET', /^\/api\/(posts|posters|events|videos|pdfs|simchas)$/, handleListContent],

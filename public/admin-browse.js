@@ -58,14 +58,17 @@ window.MOISDES.adminBrowse = (function () {
         const actionsTd = document.createElement('td');
         if (writable) {
           const editBtn = document.createElement('button');
+          editBtn.type = 'button';
           editBtn.className = 'btn btn-sm';
           editBtn.textContent = 'Edit';
           editBtn.addEventListener('click', () => openEdit(row));
           const dupBtn = document.createElement('button');
+          dupBtn.type = 'button';
           dupBtn.className = 'btn btn-sm';
           dupBtn.textContent = 'Duplicate';
           dupBtn.addEventListener('click', () => openDuplicate(row));
           const delBtn = document.createElement('button');
+          delBtn.type = 'button';
           delBtn.className = 'btn btn-sm btn-danger';
           delBtn.textContent = 'Delete';
           delBtn.addEventListener('click', () => remove(row));

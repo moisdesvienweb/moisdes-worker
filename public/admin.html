@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="/admin-styles.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <script>
   if (window.pdfjsLib) {
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -116,6 +117,16 @@
     <section class="panel" id="panel-analytics">
       <h1>Analytics</h1>
       <div id="analytics-totals" class="analytics-totals"></div>
+      <div class="chart-row">
+        <div class="chart-card">
+          <h2>Views by content type</h2>
+          <canvas id="analytics-chart-content"></canvas>
+        </div>
+        <div class="chart-card">
+          <h2>Views vs. shares</h2>
+          <canvas id="analytics-chart-kind"></canvas>
+        </div>
+      </div>
       <h2 style="margin-top:2rem">Top pages/items</h2>
       <div class="table-wrap"><table id="analytics-path-table"><thead>
         <tr><th>Path</th><th>Kind</th><th>Count</th></tr>
