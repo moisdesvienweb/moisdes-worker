@@ -60,6 +60,7 @@
   if (window.MOISDES.adminDaf) window.MOISDES.adminDaf.init();
   if (window.MOISDES.adminSettings) window.MOISDES.adminSettings.init();
   if (window.MOISDES.adminAnalytics) window.MOISDES.adminAnalytics.init();
+  if (window.MOISDES.adminEmails) window.MOISDES.adminEmails.init();
 
   // ── Apply per-section permissions to the nav ──────────────────────
   // Upload needs write; Browse only needs read (view-only browsing is
@@ -90,6 +91,7 @@
     daf: isFullAccess || !!permissions.daf?.read,
     settings: isFullAccess || !!permissions.settings?.read,
     analytics: true, // aggregate stats only — not section-scoped
+    emails: isFullAccess || !!permissions.emails?.read,
     users: isFullAccess, // account management is never delegable
   };
   let firstVisiblePanel = null;

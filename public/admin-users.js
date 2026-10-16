@@ -14,6 +14,7 @@ window.MOISDES.adminUsers = (function () {
     ['posts', 'Blog'], ['posters', 'Posters'], ['events', 'Events'],
     ['videos', 'Videos'], ['pdfs', 'PDFs'], ['simchas', 'Simchas'],
     ['forms', 'Forms'], ['daf', 'Daf Calendar'], ['settings', 'Settings'],
+    ['emails', 'Email Center'],
   ];
 
   function escapeHtml(s) {

@@ -183,6 +183,26 @@ window.MOISDES.adminForms = (function () {
     const thankMsgField = richTextField('Thank-you message', settings.thankYouMessage);
     wrap.appendChild(thankMsgField.group);
 
+    const notifyRow = el('div', 'checkbox-row');
+    const notifyCheckbox = el('input');
+    notifyCheckbox.type = 'checkbox';
+    notifyCheckbox.id = `notify-${form.id}`;
+    notifyCheckbox.checked = !!settings.notifyEmail;
+    const notifyLabel = el('label', '', 'Email me when this form gets a response');
+    notifyLabel.htmlFor = notifyCheckbox.id;
+    notifyLabel.style.margin = '0';
+    notifyRow.appendChild(notifyCheckbox);
+    notifyRow.appendChild(notifyLabel);
+    wrap.appendChild(fieldGroup('Submission notifications', notifyRow));
+
+    const notifyAddressInput = el('input');
+    notifyAddressInput.type = 'email';
+    notifyAddressInput.placeholder = 'you@example.com';
+    notifyAddressInput.value = settings.notifyAddress || '';
+    notifyAddressInput.style.display = notifyCheckbox.checked ? '' : 'none';
+    notifyCheckbox.addEventListener('change', () => { notifyAddressInput.style.display = notifyCheckbox.checked ? '' : 'none'; });
+    wrap.appendChild(notifyAddressInput);
+
     if (writable) {
       const saveBtn = el('button', 'btn btn-primary', 'Save settings');
       const status = el('span', 'status-msg', '');
@@ -199,6 +219,8 @@ window.MOISDES.adminForms = (function () {
               status: statusSelect.value,
               thankYouTitle: thankTitle.value,
               thankYouMessage: thankMsgField.editor.getHtml(),
+              notifyEmail: notifyCheckbox.checked,
+              notifyAddress: notifyAddressInput.value.trim(),
             },
           });
           status.textContent = 'Saved.';
@@ -221,7 +243,7 @@ window.MOISDES.adminForms = (function () {
       });
       wrap.appendChild(deleteBtn);
     } else {
-      [titleInput, slugInput, statusSelect, thankTitle].forEach((i) => { i.disabled = true; });
+      [titleInput, slugInput, statusSelect, thankTitle, notifyCheckbox, notifyAddressInput].forEach((i) => { i.disabled = true; });
       [descField, thankMsgField].forEach((f) => { f.group.querySelector('.rte-editor').contentEditable = 'false'; });
       wrap.appendChild(el('p', 'state-msg', "View only — you don't have write access to Forms."));
     }

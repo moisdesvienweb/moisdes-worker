@@ -2,12 +2,19 @@
 // MOISDES WORKER — single Cloudflare Worker backing the whole
 // Moisdes Vien platform: auth, content CRUD, R2 presigning, forms.
 // Bindings: env.DB (D1 "moisdes-db"), env.R2 (R2 "moisdes-media")
-// Secrets:  R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID
+// Secrets:  R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID,
+//           BREVO_API_KEY (optional — email sends dry-run/log-only
+//           without it, see sendEmail() below)
 // ================================================================
 
 const VERSION = '1.0.0';
 const BUCKET_NAME = 'moisdes-media';
 const SESSION_DAYS = 30;
+// Canonical site origin — used only for building absolute URLs that have
+// to work with no browser context of their own (image src/links inside
+// an emailed HTML page, which has no origin to resolve a relative path
+// against the way a page loaded in a browser does).
+const SITE_ORIGIN = 'https://chatzarvien.org';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -52,6 +59,83 @@ function hexToBuf(hex) {
 }
 function randomToken() {
   return bufToHex(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+// ── EMAIL (Brevo transactional API) ──────────────────────────────────
+
+// Every email gets the same branded wrapper — a navy header with the
+// site logo, the message body, then "Powered by Everything Shul" at the
+// bottom. Image src values must be absolute: an emailed HTML page has no
+// origin of its own for a browser to resolve a relative /logo.avif
+// against the way the live site does.
+function emailWrap(bodyHtml) {
+  return `<!doctype html><html><body style="margin:0;padding:0;background:#eef3f9;font-family:Georgia,'Times New Roman',serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#eef3f9;padding:40px 16px;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 18px rgba(13,32,60,.10);">
+        <tr><td style="background:#1e3766;padding:28px 36px;text-align:center;">
+          <img src="${SITE_ORIGIN}/logo.avif" alt="Moisdes Vien" height="40" style="height:40px;width:auto;max-width:260px;">
+        </td></tr>
+        <tr><td style="height:3px;background:#25a9ea;line-height:0;font-size:0;">&nbsp;</td></tr>
+        <tr><td style="padding:36px 40px 28px;color:#1c2f4d;font-size:15px;line-height:1.7;">${bodyHtml}</td></tr>
+        <tr><td style="padding:0 40px;"><div style="border-top:1px solid #dbe4ee;"></div></td></tr>
+        <tr><td style="padding:20px 40px 26px;text-align:center;">
+          <a href="https://everythingshul.com" style="text-decoration:none;color:#75879c;font-size:12px;">Powered By
+            <img src="${SITE_ORIGIN}/everythingshul-logo.png" alt="Everything Shul" height="16" style="height:16px;width:auto;vertical-align:middle;margin-left:6px;">
+          </a>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table></body></html>`;
+}
+
+// Sends one email and always logs the attempt to emails_sent — success
+// or failure — since that table IS the Email Center's sent log, not a
+// separate audit trail bolted on after the fact. No BREVO_API_KEY secret
+// configured -> every send is logged as 'dry_run' and nothing actually
+// goes out, so a fresh deploy before the secret is set degrades quietly
+// instead of every password-reset/form-notify/manual send failing hard.
+// opts: { relatedType, relatedId, sentBy } tag where a system-triggered
+// email came from (e.g. relatedType 'form_notify', relatedId the form's
+// id) — left unset for a manual Email Center send.
+async function sendEmail(env, to, subject, bodyHtml, opts = {}) {
+  const apiKey = env.BREVO_API_KEY;
+  const senderEmail = env.EMAIL_SENDER || 'noreply@chatzarvien.org';
+  const senderName = env.EMAIL_SENDER_NAME || 'Moisdes Vien';
+  const html = emailWrap(bodyHtml);
+  const log = (status, errorMessage) =>
+    env.DB.prepare(
+      'INSERT INTO emails_sent (to_email, subject, status, error_message, related_type, related_id, sent_by) VALUES (?,?,?,?,?,?,?)'
+    ).bind(to, subject, status, errorMessage || null, opts.relatedType || null, opts.relatedId || null, opts.sentBy || null).run();
+
+  if (!apiKey) {
+    console.log(`[mail:DRY-RUN] To: ${to} | Subject: ${subject}`);
+    await log('dry_run', 'BREVO_API_KEY not configured — logged only, nothing sent.');
+    return { dryRun: true };
+  }
+
+  try {
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: { 'api-key': apiKey, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        sender: { email: senderEmail, name: senderName },
+        to: [{ email: to }],
+        subject,
+        htmlContent: html,
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      await log('error', errText.slice(0, 500));
+      return { ok: false, error: errText };
+    }
+    await log('sent', null);
+    return { ok: true };
+  } catch (e) {
+    await log('error', String(e.message || e).slice(0, 500));
+    return { ok: false, error: e.message };
+  }
 }
 
 async function hashPassword(password) {
@@ -267,6 +351,28 @@ async function ensureDafTable(env) {
   )`).run();
 }
 
+// Every email the system has ever sent (password resets, form-submission
+// notifications, and anything sent manually from the Email Center) — the
+// Email Center's "sent log" reads straight from this.
+async function ensureEmailsTable(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS emails_sent (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    to_email TEXT, subject TEXT, status TEXT, error_message TEXT,
+    related_type TEXT, related_id INTEGER, sent_by INTEGER,
+    created_at TEXT DEFAULT (datetime('now'))
+  )`).run();
+}
+
+// Self-service "forgot my password" tokens — single-use, short-lived.
+async function ensurePasswordResetsTable(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS password_resets (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT
+  )`).run();
+}
+
 // Generic key/value store for small site-wide settings (e.g. the
 // newsletter signup link) that don't need their own dedicated table.
 async function ensureSettingsTable(env) {
@@ -312,6 +418,8 @@ async function ensureAllTables(env) {
   await ensureSettingsTable(env);
   await ensureAnalyticsTable(env);
   await ensurePermissionsTable(env);
+  await ensureEmailsTable(env);
+  await ensurePasswordResetsTable(env);
   migrated = true;
 }
 
@@ -359,7 +467,7 @@ function requireAdmin(user) {
 // (creating/editing accounts and granting permissions) is deliberately
 // left out — that stays admin/superadmin-only, not delegable, since it's
 // the one section that could otherwise be used to self-escalate.
-const SECTIONS = ['posts', 'posters', 'events', 'videos', 'pdfs', 'simchas', 'forms', 'daf', 'settings'];
+const SECTIONS = ['posts', 'posters', 'events', 'videos', 'pdfs', 'simchas', 'forms', 'daf', 'settings', 'emails'];
 
 // admin/superadmin always get full read+write on every section; an
 // 'editor' gets exactly what's stored for them in user_permissions (no
@@ -414,6 +522,57 @@ async function handleLogin({ request, env }) {
 async function handleLogout({ request, env }) {
   const token = bearerToken(request);
   if (token) await env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(token).run();
+  return json({ ok: true });
+}
+
+const PASSWORD_RESET_MINUTES = 60;
+
+// Always responds the same way regardless of whether the email matches
+// an account — a different response for "no such account" vs "email
+// sent" lets anyone probe which emails have logins here, which is
+// exactly the kind of thing a public, unauthenticated endpoint shouldn't
+// leak. The token itself (not the response) is what actually gates
+// anything.
+async function handleForgotPassword({ request, env }) {
+  const body = await request.json().catch(() => ({}));
+  const email = String(body.email || '').trim().toLowerCase();
+  if (!email) throw new HttpError('Email is required', 400);
+
+  const row = await env.DB.prepare('SELECT id, name FROM users WHERE email = ? AND active = 1').bind(email).first();
+  if (row) {
+    const token = randomToken();
+    const expires = new Date(Date.now() + PASSWORD_RESET_MINUTES * 60000).toISOString();
+    await env.DB.prepare('INSERT INTO password_resets (token, user_id, expires_at) VALUES (?,?,?)').bind(token, row.id, expires).run();
+    const resetUrl = `${SITE_ORIGIN}/reset-password.html?token=${encodeURIComponent(token)}`;
+    await sendEmail(env, email, 'Reset your password',
+      `<p>Hi ${row.name ? String(row.name).split(' ')[0] : 'there'},</p>
+       <p>Click the button below to set a new password. This link works for ${PASSWORD_RESET_MINUTES} minutes.</p>
+       <p style="text-align:center;margin:28px 0;"><a href="${resetUrl}" style="display:inline-block;background:#25a9ea;color:#0d2b45;font-weight:700;text-decoration:none;padding:12px 28px;border-radius:6px;">Reset password</a></p>
+       <p style="font-size:13px;color:#75879c;">If you didn't request this, you can safely ignore this email — your password won't change.</p>`,
+      { relatedType: 'password_reset', relatedId: row.id });
+  }
+  // Intentionally the same response either way (see note above).
+  return json({ ok: true, message: 'If that email has an account, a reset link is on its way.' });
+}
+
+async function handleResetPassword({ request, env }) {
+  const body = await request.json().catch(() => ({}));
+  const token = String(body.token || '');
+  const password = String(body.password || '');
+  if (!token || !password) throw new HttpError('Missing token or password', 400);
+  if (password.length < 6) throw new HttpError('Password must be at least 6 characters', 400);
+
+  const row = await env.DB.prepare('SELECT * FROM password_resets WHERE token = ?').bind(token).first();
+  if (!row || row.used_at || new Date(row.expires_at) < new Date()) {
+    throw new HttpError('This reset link is invalid or has expired. Request a new one.', 400);
+  }
+
+  const hash = await hashPassword(password);
+  await env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(hash, row.user_id).run();
+  await env.DB.prepare("UPDATE password_resets SET used_at = datetime('now') WHERE token = ?").bind(token).run();
+  // Same reasoning as the admin-driven password reset: a changed password
+  // should actually invalidate whatever session the old one was backing.
+  await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(row.user_id).run();
   return json({ ok: true });
 }
 
@@ -619,6 +778,36 @@ async function handleUpdateSettings({ request, env, user }) {
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
     ).bind(key, String(value ?? '')).run();
   }
+  return json({ ok: true });
+}
+
+// ── HANDLERS: email center ───────────────────────────────────────────
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+async function handleListEmails({ env, user }) {
+  await requireSection(env, user, 'emails', 'read');
+  const { results } = await env.DB.prepare(
+    'SELECT * FROM emails_sent ORDER BY id DESC LIMIT 200'
+  ).all();
+  return json({ emails: results });
+}
+
+// Manual send from the Email Center — the one place in this app that can
+// mail an arbitrary address, as opposed to the system-triggered sends
+// (password reset, form notifications) that only ever mail an address
+// already on file somewhere.
+async function handleSendEmail({ request, env, user }) {
+  await requireSection(env, user, 'emails', 'write');
+  const body = await request.json().catch(() => ({}));
+  const to = String(body.to || '').trim().toLowerCase();
+  const subject = String(body.subject || '').trim();
+  const bodyHtml = String(body.bodyHtml || '');
+  if (!EMAIL_RE.test(to)) throw new HttpError('Enter a valid email address', 400);
+  if (!subject) throw new HttpError('Subject is required', 400);
+  const result = await sendEmail(env, to, subject, bodyHtml, { sentBy: user.id });
+  if (result.dryRun) return json({ ok: true, dryRun: true, message: 'BREVO_API_KEY isn’t configured yet — logged, nothing actually sent.' });
+  if (!result.ok) throw new HttpError(`Email provider rejected the send: ${String(result.error || '').slice(0, 300)}`, 502);
   return json({ ok: true });
 }
 
@@ -1129,6 +1318,12 @@ function csvEscape(v) {
   const s = String(v ?? '');
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
+// Only used for embedding untrusted user input (form answers) into an
+// outgoing email's HTML — this API worker otherwise only ever emits
+// JSON, so nothing else here handles HTML at all.
+function escapeHtmlMail(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 function serializeForm(row) {
   return { ...row, settings: safeParse(row.settings, {}) };
 }
@@ -1221,15 +1416,16 @@ async function handleFormPublic({ match, env }) {
   return json({ form: serializeForm(form), fields: fields.map(serializeField) });
 }
 
-async function handleFormSubmit({ match, request, env }) {
+async function handleFormSubmit({ match, request, env, ctx }) {
   const slug = normalizeSlug(match[1]);
   const form = await findFormBySlug(env, slug);
   if (!form) throw new HttpError('Form not found', 404);
   const settings = safeParse(form.settings, {});
   if (settings.status === 'closed') throw new HttpError('This form is closed', 403);
 
-  const { results: validFields } = await env.DB.prepare('SELECT id FROM form_fields WHERE form_id = ?').bind(form.id).all();
+  const { results: validFields } = await env.DB.prepare('SELECT id, label FROM form_fields WHERE form_id = ?').bind(form.id).all();
   const validIds = new Set(validFields.map((f) => String(f.id)));
+  const labelById = Object.fromEntries(validFields.map((f) => [String(f.id), f.label]));
 
   const body = await request.json().catch(() => ({}));
   const answers = body.answers && typeof body.answers === 'object' ? body.answers : {};
@@ -1247,6 +1443,31 @@ async function handleFormSubmit({ match, request, env }) {
     await env.DB.prepare('INSERT INTO form_answers (response_id, field_id, value) VALUES (?,?,?)')
       .bind(responseId, Number(fieldId), stored).run();
   }
+
+  // Per-form "email me on new submissions" (set in the form's Settings
+  // tab) — best-effort and fire-and-forget: a notification failure must
+  // never surface as a failed submission to whoever just filled it out.
+  if (settings.notifyEmail && settings.notifyAddress && EMAIL_RE.test(settings.notifyAddress)) {
+    const rows = Object.entries(answers)
+      .filter(([fieldId, value]) => validIds.has(String(fieldId)) && value !== '' && value != null)
+      .map(([fieldId, value]) => {
+        const label = labelById[String(fieldId)] || 'Answer';
+        const text = typeof value === 'string' ? value : JSON.stringify(value);
+        return `<tr><td style="padding:4px 14px 4px 0;color:#75879c;vertical-align:top;white-space:nowrap;">${escapeHtmlMail(label)}</td><td style="padding:4px 0;">${escapeHtmlMail(text)}</td></tr>`;
+      }).join('');
+    // Cloudflare can tear the worker down right after the response is
+    // sent — waitUntil keeps it alive long enough for the fetch to Brevo
+    // and the emails_sent log write to actually finish, instead of this
+    // send silently racing the response and sometimes losing.
+    ctx.waitUntil(
+      sendEmail(env, settings.notifyAddress, `New response: ${form.title || 'Form'}`,
+        `<p>A new response came in for <strong>${escapeHtmlMail(form.title || 'your form')}</strong>.</p>
+         <table style="width:100%;border-collapse:collapse;margin-top:10px;font-size:14px;">${rows}</table>`,
+        { relatedType: 'form_notify', relatedId: form.id }
+      ).catch(() => {})
+    );
+  }
+
   return json({ ok: true });
 }
 
@@ -1336,6 +1557,8 @@ const routes = [
   ['GET', /^\/api\/ping$/, handlePing],
   ['POST', /^\/api\/login$/, handleLogin],
   ['POST', /^\/api\/logout$/, handleLogout],
+  ['POST', /^\/api\/forgot-password$/, handleForgotPassword],
+  ['POST', /^\/api\/reset-password$/, handleResetPassword],
   ['GET', /^\/api\/me$/, handleMe],
   ['POST', /^\/api\/refresh$/, handleRefresh],
   ['GET', /^\/api\/users$/, handleListUsers],
@@ -1378,6 +1601,8 @@ const routes = [
   ['GET', /^\/api\/gcal-subscribe-url$/, handleGcalSubscribeUrl],
   ['GET', /^\/api\/settings$/, handleGetSettings],
   ['PUT', /^\/api\/settings$/, handleUpdateSettings],
+  ['GET', /^\/api\/emails$/, handleListEmails],
+  ['POST', /^\/api\/emails\/send$/, handleSendEmail],
   ['POST', /^\/api\/track$/, handleTrack],
   ['GET', /^\/api\/analytics\/summary$/, handleAnalyticsSummary],
 ];

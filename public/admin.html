@@ -29,6 +29,7 @@
       <button class="sidebar-link" data-panel="daf">Daf Calendar</button>
       <button class="sidebar-link" data-panel="settings">Settings</button>
       <button class="sidebar-link" data-panel="analytics">Analytics</button>
+      <button class="sidebar-link" data-panel="emails">Email Center</button>
       <button class="sidebar-link" data-panel="users">Users</button>
     </nav>
     <button class="sidebar-link sidebar-logout" id="logout-btn">Logout</button>
@@ -125,6 +126,40 @@
       </thead><tbody></tbody></table></div>
     </section>
 
+    <!-- ===================== EMAIL CENTER ===================== -->
+    <section class="panel" id="panel-emails">
+      <h1>Email Center</h1>
+      <div class="subtabs" id="emails-tabs">
+        <button class="subtab active" data-tab="compose">Compose</button>
+        <button class="subtab" data-tab="log">Sent Log</button>
+      </div>
+
+      <div id="emails-compose-tab">
+        <form id="emails-compose-form" class="inline-form" style="flex-direction:column;align-items:flex-start;gap:1rem;max-width:640px">
+          <div class="field-group" style="width:100%">
+            <label>To</label>
+            <input type="email" id="emails-to" placeholder="someone@example.com" required>
+          </div>
+          <div class="field-group" style="width:100%">
+            <label>Subject</label>
+            <input type="text" id="emails-subject" required>
+          </div>
+          <div class="field-group" style="width:100%">
+            <label>Message</label>
+            <div id="emails-body-host"></div>
+          </div>
+          <button type="submit" class="btn btn-primary">Send</button>
+        </form>
+        <div class="state-msg" id="emails-compose-msg"></div>
+      </div>
+
+      <div id="emails-log-tab" style="display:none">
+        <div class="table-wrap"><table id="emails-log-table"><thead>
+          <tr><th>To</th><th>Subject</th><th>Status</th><th>Sent</th></tr>
+        </thead><tbody></tbody></table></div>
+      </div>
+    </section>
+
     <!-- ===================== USERS ===================== -->
     <section class="panel" id="panel-users">
       <h1>Users</h1>
@@ -168,6 +203,7 @@
 <script src="/admin-daf.js"></script>
 <script src="/admin-settings.js"></script>
 <script src="/admin-analytics.js"></script>
+<script src="/admin-emails.js"></script>
 <script src="/admin-users.js"></script>
 <script src="/admin.js"></script>
 </body>

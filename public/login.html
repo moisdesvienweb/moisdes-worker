@@ -38,6 +38,8 @@
   button:hover { filter: brightness(1.05); }
   button:disabled { opacity: .6; cursor: default; }
   .msg { min-height: 1.2rem; font-size: .82rem; color: #c0392b; margin-top: 1rem; text-align: center; }
+  .forgot-link { display: block; text-align: center; margin-top: 1.2rem; font-size: .82rem; color: #75879c; text-decoration: none; }
+  .forgot-link:hover { color: #25a9ea; }
 </style>
 </head>
 <body>
@@ -50,6 +52,7 @@
   <input type="password" id="password" required autocomplete="current-password">
   <button type="submit" id="login-btn">Log in</button>
   <div class="msg" id="login-msg"></div>
+  <a class="forgot-link" href="/forgot-password.html">Forgot password?</a>
 </form>
 
 <script src="/shared-config.js"></script>
