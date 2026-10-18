@@ -597,7 +597,15 @@ window.MOISDES.adminFields = (function () {
     render();
 
     return {
-      getValue: () => value,
+      // Reads whatever's still sitting in the free-text input (not yet
+      // committed by an Enter press) as a final fallback, so typing a new
+      // value and clicking straight to Publish — without remembering to
+      // press Enter first — still saves it instead of silently losing it.
+      getValue: () => {
+        const pending = input.value.trim();
+        if (pending && pending !== value) addNew(pending);
+        return value;
+      },
       setValue: (v) => { value = v || ''; if (value && !allOptions.includes(value)) allOptions.push(value); render(); },
       addOptions: (opts) => { (opts || []).forEach((o) => { if (o && !allOptions.includes(o)) allOptions.push(o); }); render(); },
     };
@@ -612,14 +620,23 @@ window.MOISDES.adminFields = (function () {
     });
   }
 
+  // Yomim tovim / occasions commonly used in place of a parsha (a Chanukah
+  // or Pesach issue, a bris announcement, etc.) — listed in roughly their
+  // order through the Jewish year, right after the 54 standard parshiyot.
+  const PARSHA_HOLIDAYS = [
+    'ראש השנה', 'יום כיפור', 'סוכות', 'שמיני עצרת', 'שמחת תורה', 'חנוכה',
+    'ט״ו שבט', 'פורים', 'פסח', 'ל״ג העומר', 'שבועות', 'תשעה באב', 'ברית',
+  ];
+
   // Standard 54 parshiyot (Torah-reading order, combined-reading names
-  // where applicable — same as the public-site parsha logic) plus
-  // whatever's been added beyond that via /api/parshiyot-custom.
+  // where applicable — same as the public-site parsha logic) plus the
+  // holidays/occasions above, plus whatever's been added beyond that via
+  // /api/parshiyot-custom.
   function createParshaPicker(container, initialValue) {
     const CFG = window.MOISDES.CFG;
     const standard = (CFG.parshiyot || []).map((p) => CFG.combined[p] || p);
     const picker = createSinglePillPicker(container, {
-      options: standard,
+      options: [...standard, ...PARSHA_HOLIDAYS],
       initial: initialValue,
       placeholder: 'Add a new parsha label…',
       sort: false,
