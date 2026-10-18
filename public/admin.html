@@ -47,6 +47,7 @@
         <button class="subtab" data-type="videos">Videos</button>
         <button class="subtab" data-type="pdfs">PDFs</button>
         <button class="subtab" data-type="simchas">Simchas</button>
+        <button class="subtab" data-type="calendar">Calendar</button>
       </div>
       <div id="upload-form-container"></div>
     </section>
@@ -101,6 +102,10 @@
         <div class="field-group" style="width:100%">
           <label>Newsletter signup URL (footer button — leave blank to hide the button)</label>
           <input type="text" id="settings-newsletter-url" placeholder="https://... (a form link, mailing list, etc.)">
+        </div>
+        <div class="field-group" style="width:100%">
+          <label>Google Maps API key (enables address autocomplete on the Calendar upload tab)</label>
+          <input type="text" id="settings-gmaps-key" placeholder="AIza... (leave blank to use a plain text field)">
         </div>
         <div class="field-group" style="width:100%">
           <label>Footer buttons (shown in a row next to the newsletter/contact buttons)</label>

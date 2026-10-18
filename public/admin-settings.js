@@ -31,6 +31,7 @@ window.MOISDES.adminSettings = (function () {
   function init() {
     const form = document.getElementById('settings-form');
     const urlInput = document.getElementById('settings-newsletter-url');
+    const gmapsInput = document.getElementById('settings-gmaps-key');
     const listEl = document.getElementById('footer-buttons-list');
     const addBtn = document.getElementById('footer-buttons-add');
     const msg = document.getElementById('settings-msg');
@@ -69,6 +70,7 @@ window.MOISDES.adminSettings = (function () {
 
     api.get('/api/settings').then(({ settings }) => {
       urlInput.value = settings.newsletter_url || '';
+      if (gmapsInput) gmapsInput.value = settings.gmaps_api_key || '';
       buttons = safeParse(settings.footer_buttons, []);
       if (!Array.isArray(buttons)) buttons = [];
       renderButtons();
@@ -76,6 +78,7 @@ window.MOISDES.adminSettings = (function () {
 
     if (!writable) {
       urlInput.disabled = true;
+      if (gmapsInput) gmapsInput.disabled = true;
       addBtn.style.display = 'none';
       form.querySelector('button[type=submit]').style.display = 'none';
       msg.textContent = "View only — you don't have write access to Settings.";
@@ -98,6 +101,7 @@ window.MOISDES.adminSettings = (function () {
         await api.put('/api/settings', {
           settings: {
             newsletter_url: urlInput.value.trim(),
+            gmaps_api_key: gmapsInput ? gmapsInput.value.trim() : '',
             footer_buttons: JSON.stringify(cleanButtons),
           },
         });

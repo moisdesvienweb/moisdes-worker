@@ -101,6 +101,15 @@ window.MOISDES.adminForms = (function () {
       span.addEventListener('click', () => selectForm(f.id));
       li.appendChild(span);
       if (f.unread_count > 0) li.appendChild(el('span', 'nav-badge', String(f.unread_count)));
+
+      // Jumps straight to this form's responses table — available to
+      // anyone who can see the form at all (not write-gated, unlike
+      // Duplicate below), since reading responses only needs read access.
+      const respBtn = el('button', 'btn btn-sm btn-primary', 'Responses');
+      respBtn.style.marginInlineStart = '.5rem';
+      respBtn.addEventListener('click', (e) => { e.stopPropagation(); openFormResponses(f.id); });
+      li.appendChild(respBtn);
+
       if (canWrite()) {
         const dupBtn = el('button', 'btn btn-sm', 'Duplicate');
         dupBtn.style.marginInlineStart = '.5rem';
@@ -110,6 +119,16 @@ window.MOISDES.adminForms = (function () {
       formsListEl.appendChild(li);
     });
     updateNavBadge();
+  }
+
+  // Selects the form (if not already active) then scrolls its responses
+  // table into view once the detail panel has finished rendering —
+  // settings/fields/responses all still render together, this just gets
+  // the admin straight to the part they clicked for.
+  async function openFormResponses(formId) {
+    await selectForm(formId);
+    const target = detailEl.querySelector('.response-table-wrap');
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   // Creates a new form with the same settings + fields as `source`, then

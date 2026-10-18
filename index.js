@@ -4,7 +4,10 @@
 // Bindings: env.DB (D1 "moisdes-db"), env.R2 (R2 "moisdes-media")
 // Secrets:  R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID,
 //           BREVO_API_KEY (optional — email sends dry-run/log-only
-//           without it, see sendEmail() below)
+//           without it, see sendEmail() below),
+//           GCAL_SERVICE_ACCOUNT_JSON (optional — writing calendar events
+//           fails with a clear error without it, see
+//           getGoogleAccessToken() below and GOOGLE_CALENDAR_SETUP.md)
 // ================================================================
 
 const VERSION = '1.0.0';
@@ -59,6 +62,25 @@ function hexToBuf(hex) {
 }
 function randomToken() {
   return bufToHex(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+// base64url (no padding) of a string or raw bytes — used by the Google
+// service-account JWT below (standard base64's '+/=' aren't URL-safe).
+function base64UrlEncode(input) {
+  const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : new Uint8Array(input);
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// A service-account private key arrives as PEM text; Web Crypto's
+// importKey wants the raw PKCS8 DER bytes underneath it.
+function pemToArrayBuffer(pem) {
+  const b64 = pem.replace(/-----BEGIN PRIVATE KEY-----/, '').replace(/-----END PRIVATE KEY-----/, '').replace(/\s+/g, '');
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
 }
 
 // ── EMAIL (Brevo transactional API) ──────────────────────────────────
@@ -478,7 +500,7 @@ function requireAdmin(user) {
 // (creating/editing accounts and granting permissions) is deliberately
 // left out — that stays admin/superadmin-only, not delegable, since it's
 // the one section that could otherwise be used to self-escalate.
-const SECTIONS = ['posts', 'posters', 'events', 'videos', 'pdfs', 'simchas', 'forms', 'daf', 'settings', 'emails'];
+const SECTIONS = ['posts', 'posters', 'events', 'videos', 'pdfs', 'simchas', 'forms', 'daf', 'settings', 'emails', 'calendar'];
 
 // admin/superadmin always get full read+write on every section; an
 // 'editor' gets exactly what's stored for them in user_permissions (no
@@ -1065,6 +1087,110 @@ async function handleGcalSubscribeUrl({ env }) {
   return json({ url: `https://calendar.google.com/calendar/render?cid=${encodeURIComponent(calendarId)}` });
 }
 
+// ── GOOGLE CALENDAR WRITE (service account) ──────────────────────────
+//
+// The two handlers above only ever read the calendar's public iCal feed.
+// Creating events needs real write credentials — a Google service account
+// (env.GCAL_SERVICE_ACCOUNT_JSON, the full JSON key as a string secret)
+// that's been given "Make changes to events" access on the calendar in
+// Google Calendar's sharing settings. See GOOGLE_CALENDAR_SETUP.md for the
+// one-time setup. Workers have no googleapis SDK, so this signs a JWT by
+// hand with Web Crypto and exchanges it for an access token exactly like
+// any OAuth2 service-account flow.
+
+// Module-level — survives for the life of this Worker isolate, so most
+// requests reuse the cached token instead of signing + exchanging a fresh
+// JWT every single time (same pattern as the `migrated` flag elsewhere).
+let gcalTokenCache = { token: null, exp: 0 };
+
+async function getGoogleAccessToken(env) {
+  const now = Math.floor(Date.now() / 1000);
+  if (gcalTokenCache.token && gcalTokenCache.exp > now) return gcalTokenCache.token;
+
+  const raw = env.GCAL_SERVICE_ACCOUNT_JSON;
+  if (!raw) throw new HttpError('GCAL_SERVICE_ACCOUNT_JSON is not configured on the Worker — see GOOGLE_CALENDAR_SETUP.md', 500);
+  let creds;
+  try { creds = JSON.parse(raw); } catch (e) { throw new HttpError('GCAL_SERVICE_ACCOUNT_JSON is not valid JSON', 500); }
+
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const claims = {
+    iss: creds.client_email,
+    scope: 'https://www.googleapis.com/auth/calendar',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3600,
+  };
+  const unsigned = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(claims))}`;
+  const key = await crypto.subtle.importKey(
+    'pkcs8',
+    pemToArrayBuffer(creds.private_key || ''),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(unsigned));
+  const jwt = `${unsigned}.${base64UrlEncode(signature)}`;
+
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=${encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')}&assertion=${encodeURIComponent(jwt)}`,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) {
+    throw new HttpError(`Google auth failed: ${data.error_description || data.error || 'unknown error'}`, 502);
+  }
+
+  gcalTokenCache = { token: data.access_token, exp: now + (data.expires_in || 3600) - 60 };
+  return data.access_token;
+}
+
+async function handleCreateGcalEvent({ request, env, user }) {
+  await requireSection(env, user, 'calendar', 'write');
+  const calendarId = env.GCAL_CALENDAR_ID;
+  if (!calendarId) throw new HttpError('GCAL_CALENDAR_ID is not configured on the Worker', 500);
+
+  const body = await request.json().catch(() => ({}));
+  const title = String(body.title || '').trim();
+  const startDate = String(body.startDate || '').trim();
+  const endDate = String(body.endDate || startDate).trim();
+  const startTime = String(body.startTime || '').trim();
+  const endTime = String(body.endTime || '').trim();
+  const location = String(body.location || '').trim();
+  const description = String(body.description || '');
+  if (!title) throw new HttpError('Title is required', 400);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw new HttpError('A valid start date is required', 400);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw new HttpError('A valid end date is required', 400);
+
+  const timeZone = env.GCAL_TIMEZONE || 'America/New_York';
+  const allDay = !startTime && !endTime;
+
+  let start, end;
+  if (allDay) {
+    start = { date: startDate };
+    // Google's end.date is EXCLUSIVE — bump one day past the last day so a
+    // single-day pick (start === end) still renders as that one day
+    // instead of a zero-length event.
+    const endObj = new Date(`${endDate}T00:00:00Z`);
+    endObj.setUTCDate(endObj.getUTCDate() + 1);
+    end = { date: endObj.toISOString().slice(0, 10) };
+  } else {
+    start = { dateTime: `${startDate}T${startTime || '00:00'}:00`, timeZone };
+    end = { dateTime: `${endDate}T${endTime || startTime || '23:59'}:00`, timeZone };
+  }
+
+  const accessToken = await getGoogleAccessToken(env);
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ summary: title, description, location, start, end }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new HttpError(`Google Calendar rejected the event: ${data.error?.message || 'unknown error'}`, 502);
+
+  return json({ ok: true, event: { id: data.id, htmlLink: data.htmlLink } });
+}
+
 // ── HANDLERS: R2 ────────────────────────────────────────────────────
 
 const MIME_MAP = {
@@ -1633,6 +1759,7 @@ const routes = [
   ['GET', /^\/api\/daf-entries$/, handleDafEntries],
   ['POST', /^\/api\/daf-entries\/bulk$/, handleDafBulkUpsert],
   ['GET', /^\/api\/gcal-events$/, handleGcalEvents],
+  ['POST', /^\/api\/gcal-events$/, handleCreateGcalEvent],
   ['GET', /^\/api\/gcal-subscribe-url$/, handleGcalSubscribeUrl],
   ['GET', /^\/api\/settings$/, handleGetSettings],
   ['PUT', /^\/api\/settings$/, handleUpdateSettings],

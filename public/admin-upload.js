@@ -53,6 +53,48 @@ window.MOISDES.adminUpload = (function () {
     node.className = 'status-msg' + (ok === true ? ' ok' : ok === false ? ' err' : '');
   }
 
+  // Loads the Google Maps JS API (places library) exactly once per page —
+  // cached as a promise so every calendar-tab render after the first
+  // reuses the same load instead of re-injecting the script tag.
+  let gmapsLoadPromise = null;
+  function loadGoogleMaps(apiKey) {
+    if (window.google?.maps?.places) return Promise.resolve();
+    if (gmapsLoadPromise) return gmapsLoadPromise;
+    gmapsLoadPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places`;
+      script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => { gmapsLoadPromise = null; reject(new Error('Failed to load Google Maps')); };
+      document.head.appendChild(script);
+    });
+    return gmapsLoadPromise;
+  }
+
+  // Plain text input that upgrades itself to a Google Places autocomplete
+  // field once a Maps API key is configured in Settings — degrades to a
+  // normal free-text location field (no error) when no key is set yet.
+  function locationAutocompleteInput(initialValue) {
+    const wrap = el('div');
+    const input = textInput('Start typing an address…', initialValue);
+    wrap.appendChild(input);
+    const hint = el('div', 'state-msg', '');
+    wrap.appendChild(hint);
+
+    api.get('/api/settings').then(({ settings }) => {
+      const key = settings.gmaps_api_key;
+      if (!key) {
+        hint.textContent = 'Tip: add a Google Maps API key in Settings to get address autocomplete here.';
+        return;
+      }
+      loadGoogleMaps(key).then(() => {
+        new google.maps.places.Autocomplete(input, { fields: ['formatted_address', 'name'] });
+      }).catch(() => { hint.textContent = 'Could not load Google Maps autocomplete.'; });
+    }).catch(() => {});
+
+    return { wrap, getValue: () => input.value.trim() };
+  }
+
   // Parsha field uses AF.createParshaPicker (pill-select + add-new) now —
   // see admin-fields.js.
 
@@ -124,9 +166,13 @@ window.MOISDES.adminUpload = (function () {
     // PDFs in create mode use a per-file date picker inside each batch
     // card instead (see below) — one shared date wouldn't make sense
     // once multiple PDFs, each wanting its own date, are involved.
+    // The Calendar tab has its own start/end date pickers below (a date
+    // range, not a single date) — same reasoning as the PDF batch-create
+    // exclusion just above.
     const isPdfBatchCreate = type === 'pdfs' && !isEdit;
+    const isCalendarCreate = type === 'calendar';
     const datePickerWrap = el('div');
-    if (!isPdfBatchCreate) form.appendChild(fieldGroup(type === 'simchas' ? 'Date added' : 'Date', datePickerWrap));
+    if (!isPdfBatchCreate && !isCalendarCreate) form.appendChild(fieldGroup(type === 'simchas' ? 'Date added' : 'Date', datePickerWrap));
     const datePicker = AF.createDatePicker(datePickerWrap, prefillSrc ? (prefillSrc.date || prefillSrc.date_added || '').slice(0, 10) : '');
 
     let getExtra;
@@ -534,9 +580,50 @@ window.MOISDES.adminUpload = (function () {
       const text = textarea('Simcha (e.g. names + occasion)', prefillSrc?.text);
       form.appendChild(fieldGroup('Text', text));
       getExtra = () => ({ text: text.value });
+
+    } else if (type === 'calendar') {
+      // Writes a real event straight to the admin's Google Calendar (via
+      // the Worker's service-account credentials) — this isn't a site
+      // content type and has no local record, so there's nothing to
+      // browse/edit here afterward; manage it in Google Calendar itself.
+      const title = textInput('Event title', '');
+      form.appendChild(fieldGroup('Title', title));
+
+      const startDateWrap = el('div');
+      form.appendChild(fieldGroup('Start date', startDateWrap));
+      const startDatePicker = AF.createDatePicker(startDateWrap, '');
+
+      const endDateWrap = el('div');
+      form.appendChild(fieldGroup('End date (same as start for a one-day event)', endDateWrap));
+      const endDatePicker = AF.createDatePicker(endDateWrap, '');
+
+      const timeRow = el('div', 'field-row');
+      const startTime = el('input');
+      startTime.type = 'time';
+      const endTime = el('input');
+      endTime.type = 'time';
+      timeRow.appendChild(startTime);
+      timeRow.appendChild(endTime);
+      form.appendChild(fieldGroup('Start / end time (leave both blank for an all-day event)', timeRow));
+
+      const locationField = locationAutocompleteInput('');
+      form.appendChild(fieldGroup('Location', locationField.wrap));
+
+      const descField = richTextField('Description', '');
+      form.appendChild(descField.group);
+
+      getExtra = () => ({
+        title: title.value.trim(),
+        startDate: startDatePicker.getIso(),
+        endDate: endDatePicker.getIso() || startDatePicker.getIso(),
+        startTime: startTime.value,
+        endTime: endTime.value,
+        location: locationField.getValue(),
+        description: descField.editor.getHtml(),
+      });
     }
 
-    const submitBtn = el('button', 'btn btn-primary', isEdit ? 'Save changes' : 'Publish');
+    const submitBtn = el('button', 'btn btn-primary', isEdit ? 'Save changes' : (type === 'calendar' ? 'Create event' : 'Publish'));
     submitBtn.type = 'submit';
     form.appendChild(submitBtn);
     form.appendChild(status);
@@ -585,6 +672,24 @@ window.MOISDES.adminUpload = (function () {
           buildForm(type, container);
         } else {
           setStatus(status, `Published ${okCount} of ${form._pdfCards.length} — see each card above for what failed.`, false);
+          submitBtn.disabled = false;
+        }
+        return;
+      }
+
+      // Calendar — a one-shot write straight to Google Calendar, nothing
+      // saved locally, so it skips the whole date/payload/R2 flow below.
+      if (type === 'calendar') {
+        try {
+          const extra = getExtra();
+          if (!extra.title) throw new Error('Please enter a title.');
+          if (!extra.startDate) throw new Error('Please choose a start date.');
+          setStatus(status, 'Creating calendar event…');
+          await api.post('/api/gcal-events', extra);
+          setStatus(status, 'Event created in Google Calendar.', true);
+          buildForm(type, container);
+        } catch (err) {
+          setStatus(status, err.message || 'Something went wrong.', false);
           submitBtn.disabled = false;
         }
         return;
