@@ -95,6 +95,12 @@
   }
 
   async function loadMosaic() {
+    // The Worker pre-renders this same mosaic straight into the page's
+    // HTML (see handleHomePage in index.js) whenever it can — in that
+    // case the content the visitor sees is already final on first paint,
+    // and this whole function just needs to fetch the feed for the
+    // "more news" strip/button below it, not rebuild what's already there.
+    const alreadyRendered = mosaicEl.dataset.ssr === '1';
     try {
       // One combined request instead of five separate ones — same data,
       // one round trip (and edge-cached on the Worker side too).
@@ -110,39 +116,45 @@
       allFlat.sort((a, b) => util.dateDesc(a.data.date, b.data.date));
 
       if (!allFlat.length) {
-        mosaicEl.innerHTML = '<p class="state-msg">נאך קיין אינהאלט נישט פארעפנטליכט</p>';
+        if (!alreadyRendered) mosaicEl.innerHTML = '<p class="state-msg">נאך קיין אינהאלט נישט פארעפנטליכט</p>';
         return;
       }
-      // Curate exactly 10 for the mosaic: newest blog post always
-      // included (and always the "big" tile), one of every other
-      // section guaranteed, rest filled by overall recency.
-      const chosen = [];
-      const chosenSet = new Set();
-      function add(type, data) {
-        const k = itemKey(type, data);
-        if (chosenSet.has(k)) return;
-        chosenSet.add(k);
-        chosen.push({ type, data });
-      }
-      const featuredPost = byType.post[0];
-      if (featuredPost) add('post', featuredPost);
-      ['poster', 'event', 'video', 'pdf'].forEach((t) => { if (byType[t][0]) add(t, byType[t][0]); });
-      for (const it of allFlat) {
-        if (chosen.length >= 10) break;
-        add(it.type, it.data);
-      }
-      chosen.sort((a, b) => util.dateDesc(a.data.date, b.data.date));
 
-      mosaicEl.innerHTML = '';
-      // First tile (newest post) is always the big feature. Beyond that,
-      // a couple of tiles in each half of the grid get a wide/tall span
-      // for a proper magazine rhythm — otherwise every non-featured tile
-      // is a uniform 1x1, which looks flat next to the one big tile.
-      const SIZE_BY_INDEX = { 0: 'mosaic-big', 2: 'mosaic-tall', 3: 'mosaic-wide', 7: 'mosaic-tall', 8: 'mosaic-wide' };
-      for (let i = 0; i < chosen.length; i++) {
-        const { type, data } = chosen[i];
-        const tile = await renderMosaicTile(type, data, SIZE_BY_INDEX[i] || '');
-        mosaicEl.appendChild(tile);
+      if (!alreadyRendered) {
+        // Curate exactly 10 for the mosaic: newest blog post always
+        // included (and always the "big" tile), one of every other
+        // section guaranteed, rest filled by overall recency. (Mirrored
+        // server-side in index.js's renderHomeMosaicHtml when this page
+        // was pre-rendered — keep the two in sync.)
+        const chosen = [];
+        const chosenSet = new Set();
+        function add(type, data) {
+          const k = itemKey(type, data);
+          if (chosenSet.has(k)) return;
+          chosenSet.add(k);
+          chosen.push({ type, data });
+        }
+        const featuredPost = byType.post[0];
+        if (featuredPost) add('post', featuredPost);
+        ['poster', 'event', 'video', 'pdf'].forEach((t) => { if (byType[t][0]) add(t, byType[t][0]); });
+        for (const it of allFlat) {
+          if (chosen.length >= 10) break;
+          add(it.type, it.data);
+        }
+        chosen.sort((a, b) => util.dateDesc(a.data.date, b.data.date));
+
+        mosaicEl.innerHTML = '';
+        // First tile (newest post) is always the big feature. Beyond
+        // that, a couple of tiles in each half of the grid get a
+        // wide/tall span for a proper magazine rhythm — otherwise every
+        // non-featured tile is a uniform 1x1, which looks flat next to
+        // the one big tile.
+        const SIZE_BY_INDEX = { 0: 'mosaic-big', 2: 'mosaic-tall', 3: 'mosaic-wide', 7: 'mosaic-tall', 8: 'mosaic-wide' };
+        for (let i = 0; i < chosen.length; i++) {
+          const { type, data } = chosen[i];
+          const tile = await renderMosaicTile(type, data, SIZE_BY_INDEX[i] || '');
+          mosaicEl.appendChild(tile);
+        }
       }
 
       // "More news" is the full recent list in date order — it's fine
@@ -156,7 +168,7 @@
         moreBtn.style.display = 'none';
       }
     } catch (e) {
-      mosaicEl.innerHTML = '<p class="state-msg">נישט געקענט לאדן</p>';
+      if (!alreadyRendered) mosaicEl.innerHTML = '<p class="state-msg">נישט געקענט לאדן</p>';
     }
   }
 

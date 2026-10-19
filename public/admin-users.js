@@ -130,6 +130,16 @@ window.MOISDES.adminUsers = (function () {
     }
   }
 
+  async function deleteUser(u) {
+    if (!confirm(`Delete ${u.name} (${u.email})? This cannot be undone.`)) return;
+    try {
+      await api.del(`/api/users/${u.id}`);
+      load();
+    } catch (e) {
+      alert(e.message || 'Could not delete user.');
+    }
+  }
+
   // The list itself is visible to everyone who's logged in — only the
   // per-row actions below are gated to whoever can actually manage users.
   async function load() {
@@ -168,6 +178,18 @@ window.MOISDES.adminUsers = (function () {
           pwBtn.style.marginInlineStart = u.role === 'editor' ? '.4rem' : '0';
           pwBtn.addEventListener('click', () => setPassword(u));
           actionsTd.appendChild(pwBtn);
+
+          // Can't delete your own account (backend blocks it too) or the
+          // seed superadmin account.
+          if (u.id !== api.getUser()?.id && u.email !== 'tulib.vien@gmail.com') {
+            const delBtn = document.createElement('button');
+            delBtn.type = 'button';
+            delBtn.className = 'btn btn-sm btn-danger';
+            delBtn.textContent = 'Delete';
+            delBtn.style.marginInlineStart = '.4rem';
+            delBtn.addEventListener('click', () => deleteUser(u));
+            actionsTd.appendChild(delBtn);
+          }
         }
         tr.appendChild(actionsTd);
         tbody.appendChild(tr);

@@ -718,6 +718,19 @@ async function handleChangeOwnPassword({ request, env, user }) {
   return json({ ok: true });
 }
 
+async function handleDeleteUser({ match, env, user }) {
+  const targetId = Number(match[1]);
+  if (targetId === user.id) throw new HttpError("You can't delete your own account", 400);
+  const target = await env.DB.prepare('SELECT id, role, email FROM users WHERE id = ?').bind(targetId).first();
+  if (!target) throw new HttpError('User not found', 404);
+  await requireUsersWriteOnTarget(env, user, target.role);
+  if (target.email === SUPERADMIN_EMAIL) throw new HttpError("The superadmin account can't be deleted", 400);
+  await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(targetId).run();
+  await env.DB.prepare('DELETE FROM user_permissions WHERE user_id = ?').bind(targetId).run();
+  await env.DB.prepare('DELETE FROM users WHERE id = ?').bind(targetId).run();
+  return json({ ok: true });
+}
+
 async function handleCreateUser({ request, env, user }) {
   const body = await request.json().catch(() => ({}));
   const name = String(body.name || '').trim();
@@ -764,12 +777,30 @@ const ORDER_COLUMN = { simchas: 'date_added' };
 // + "more news" strip ever show; a full, uncapped list per type is still
 // available from each type's own /api/<type> endpoint (used by Browse &
 // Edit and the dedicated section pages).
-async function handleHomeFeed({ env, ctx }) {
-  const cache = caches.default;
-  const cacheKey = new Request('https://cache.internal/home-feed');
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
+// A post/poster/event-without-its-own-thumbnail/direct-upload-video shows
+// whatever's alphabetically first in its R2 "folder" as its thumbnail.
+// The client used to resolve this itself — one extra /api/r2-list round
+// trip PER tile, awaited one at a time — which was the actual dominant
+// cost on the home page (far more than the five content-list requests
+// already combined into this endpoint). Resolving it here instead, with
+// a direct R2 binding call (no HTTP round trip at all) run in parallel
+// across every row, means the client never has to make that call itself.
+async function firstImageKey(env, folderUrl) {
+  if (!folderUrl) return null;
+  try {
+    const listed = await env.R2.list({ prefix: folderUrl, limit: 25 });
+    const keys = listed.objects.map((o) => o.key).sort();
+    return keys[0] || null;
+  } catch (e) { return null; }
+}
 
+function youtubeIdServer(url) {
+  if (!url) return null;
+  const m = String(url).match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{6,})/);
+  return m ? m[1] : null;
+}
+
+async function getHomeFeedPayload(env) {
   const tables = ['posts', 'posters', 'events', 'videos', 'pdfs'];
   const resultsArr = await Promise.all(tables.map((t) => {
     const orderCol = ORDER_COLUMN[t] || 'date';
@@ -780,8 +811,243 @@ async function handleHomeFeed({ env, ctx }) {
   const payload = {};
   tables.forEach((t, i) => { payload[t] = resultsArr[i].results; });
 
+  // Posts/posters always need their gallery's first image; events/videos
+  // only need it as a fallback (an event's own thumb_url wins if set, a
+  // video's YouTube thumbnail wins if its URL has one) — skip the R2 call
+  // entirely whenever it won't end up being used anyway. PDFs always have
+  // their own thumb_url with no folder fallback, so they're untouched.
+  await Promise.all([
+    ...payload.posts.map(async (r) => { r.first_image_key = await firstImageKey(env, r.folder_url); }),
+    ...payload.posters.map(async (r) => { r.first_image_key = await firstImageKey(env, r.folder_url); }),
+    ...payload.events.map(async (r) => { if (!r.thumb_url) r.first_image_key = await firstImageKey(env, r.folder_url); }),
+    ...payload.videos.map(async (r) => { if (!youtubeIdServer(r.video_url)) r.first_image_key = await firstImageKey(env, r.folder_url); }),
+  ]);
+  return payload;
+}
+
+async function handleHomeFeed({ env, ctx }) {
+  const cache = caches.default;
+  const cacheKey = new Request('https://cache.internal/home-feed');
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const payload = await getHomeFeedPayload(env);
   const response = new Response(JSON.stringify(payload), {
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=30' },
+  });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+}
+
+// ── HOME PAGE SSR (mosaic pre-rendered server-side) ──────────────────
+// The home page's mosaic used to be entirely client-rendered: blank page
+// -> fetch -> build DOM. Instead, GET / is now intercepted (see
+// wrangler.toml's [assets] run_worker_first) so the mosaic's HTML can be
+// baked directly into the page before it's ever sent to the browser — the
+// visitor's very first paint already has real content, no fetch/render
+// gap to cover with the loading overlay. The whole rendered page is then
+// cached the same way the API responses above are, so this only actually
+// costs a D1+R2 round trip once per cache window, not once per visitor.
+// zmanim/daf/upcoming (personalized/geolocated, or just lower priority)
+// stay exactly as before — client-fetched after the page is already
+// visible, per the user's own call that those can land a moment later.
+
+// Minimal Hebrew-date conversion (Gregorian ISO -> Hebrew display
+// string) — mirrors hebrew-dates.js's isoToHebrewString and everything it
+// depends on. Duplicated here (rather than shared) because that file is
+// written for the browser (attaches to window.MOISDES) and this runs in
+// the Worker; keep the two in sync if the calendar math there ever
+// changes. See hebrew-dates.js for the derivation/verification notes.
+const HEB_PARTS_PER_HOUR = 1080;
+const HEB_PARTS_PER_DAY = 25920;
+const HEB_MONTH_PARTS = 29 * HEB_PARTS_PER_DAY + 12 * HEB_PARTS_PER_HOUR + 793;
+const HEB_EPOCH_PARTS = 1 * HEB_PARTS_PER_DAY + 5 * HEB_PARTS_PER_HOUR + 204;
+const HEB_EPOCH = 347996;
+const HEB_MONTH_NAMES_REGULAR = ['תשרי', 'חשון', 'כסלו', 'טבת', 'שבט', 'אדר', 'ניסן', 'אייר', 'סיון', 'תמוז', 'אב', 'אלול'];
+const HEB_MONTH_NAMES_LEAP = ['תשרי', 'חשון', 'כסלו', 'טבת', 'שבט', 'אדר א', 'אדר ב', 'ניסן', 'אייר', 'סיון', 'תמוז', 'אב', 'אלול'];
+
+function gregorianToJDN(y, m, d) {
+  const a = Math.floor((14 - m) / 12);
+  const y2 = y + 4800 - a;
+  const m2 = m + 12 * a - 3;
+  return d + Math.floor((153 * m2 + 2) / 5) + 365 * y2 + Math.floor(y2 / 4) -
+    Math.floor(y2 / 100) + Math.floor(y2 / 400) - 32045;
+}
+function isHebrewLeapYearServer(year) { return ((7 * year + 1) % 19) < 7; }
+function monthsElapsedServer(year) { return Math.floor((235 * year - 234) / 19); }
+function moladPartsServer(year) { return HEB_EPOCH_PARTS + monthsElapsedServer(year) * HEB_MONTH_PARTS; }
+function roshHashanaDayServer(year) {
+  const totalParts = moladPartsServer(year);
+  let rhDay = Math.floor(totalParts / HEB_PARTS_PER_DAY) + 1;
+  const partsInDay = totalParts % HEB_PARTS_PER_DAY;
+  const dow = (rhDay - 1) % 7;
+  const leap = isHebrewLeapYearServer(year);
+  const prevLeap = isHebrewLeapYearServer(year - 1);
+  if (partsInDay >= 18 * HEB_PARTS_PER_HOUR) rhDay += 1;
+  else if (!leap && dow === 2 && partsInDay >= 9 * HEB_PARTS_PER_HOUR + 204) rhDay += 1;
+  else if (prevLeap && dow === 1 && partsInDay >= 15 * HEB_PARTS_PER_HOUR + 589) rhDay += 1;
+  const finalDow = (rhDay - 1) % 7;
+  if (finalDow === 0 || finalDow === 3 || finalDow === 5) rhDay += 1;
+  return rhDay;
+}
+function hebrewYearLengthServer(year) { return roshHashanaDayServer(year + 1) - roshHashanaDayServer(year); }
+function monthNamesServer(year) { return isHebrewLeapYearServer(year) ? HEB_MONTH_NAMES_LEAP : HEB_MONTH_NAMES_REGULAR; }
+function monthLengthsServer(year) {
+  const leap = isHebrewLeapYearServer(year);
+  const yl = hebrewYearLengthServer(year);
+  const base = leap ? yl - 30 : yl;
+  let cheshvan, kislev;
+  if (base === 353) { cheshvan = 29; kislev = 29; }
+  else if (base === 354) { cheshvan = 29; kislev = 30; }
+  else { cheshvan = 30; kislev = 30; }
+  const lengths = [30, cheshvan, kislev, 29, 30];
+  if (leap) lengths.push(30, 29); else lengths.push(29);
+  lengths.push(30, 29, 30, 29, 30, 29);
+  return lengths;
+}
+function jdnToHebrewServer(jdn) {
+  let year = Math.round((jdn - HEB_EPOCH) / 365.2468);
+  while (HEB_EPOCH + roshHashanaDayServer(year) > jdn) year--;
+  while (HEB_EPOCH + roshHashanaDayServer(year + 1) <= jdn) year++;
+  const lengths = monthLengthsServer(year);
+  let remaining = jdn - (HEB_EPOCH + roshHashanaDayServer(year));
+  let month = 1;
+  while (remaining >= lengths[month - 1]) { remaining -= lengths[month - 1]; month++; }
+  return { year, month, day: remaining + 1 };
+}
+const HEB_HUNDREDS = ['', 'ק', 'ר', 'ש', 'ת'];
+const HEB_TENS = ['', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ'];
+const HEB_ONES = ['', 'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט'];
+function gematriaServer(n) {
+  let h = Math.floor(n / 100), t = Math.floor((n % 100) / 10), o = n % 10, r = '';
+  while (h > 4) { r += 'ת'; h -= 4; }
+  r += HEB_HUNDREDS[h] || '';
+  const to = t * 10 + o;
+  if (to === 15) return r + 'ט"ו';
+  if (to === 16) return r + 'ט"ז';
+  r += HEB_TENS[t] || '';
+  r += HEB_ONES[o] || '';
+  if (r.length === 0) return '';
+  if (r.length === 1) return r + "'";
+  return r.slice(0, -1) + '"' + r.slice(-1);
+}
+function isoToHebrewStringServer(iso) {
+  const [y, m, d] = String(iso || '').split('-').map(Number);
+  if (!y || !m || !d) return '';
+  const heb = jdnToHebrewServer(gregorianToJDN(y, m, d));
+  return `${gematriaServer(heb.day)} ${monthNamesServer(heb.year)[heb.month - 1]} ${gematriaServer(heb.year - 5000)}`;
+}
+
+function r2UrlServer(key) {
+  return `/api/r2/${String(key).split('/').map(encodeURIComponent).join('/')}`;
+}
+
+// Mirrors home.js's TYPE_META/titleFor/imageFor/dateDesc + the mosaic's
+// "featured post + one of every type + fill by recency" selection and
+// its renderMosaicTile markup — keep in sync if that file's mosaic logic
+// changes. Only the mosaic (above-the-fold, first paint) is rendered
+// server-side; the "more news" strip below it stays client-rendered,
+// same as before.
+const HOME_TYPE_META = {
+  post: { label: 'בלאג', href: (d) => `/blog/post.html?id=${d.id}` },
+  poster: { label: 'מודעה', href: (d) => `/posters#poster-${d.id}` },
+  event: { label: 'מעמד', href: (d) => `/events/post.html?id=${d.id}` },
+  video: { label: 'ווידיאו', href: (d) => `/video/post.html?id=${d.id}` },
+  pdf: { label: 'גליון', href: (d) => `/pdfs#pdf-${d.id}` },
+};
+function homeTitleFor(type, data) {
+  if (type === 'poster') return data.parsha ? `מודעה — ${data.parsha}` : 'מודעה';
+  return data.title || '';
+}
+function homeImageFor(type, data) {
+  if (type === 'event') return data.thumb_url ? r2UrlServer(data.thumb_url) : (data.first_image_key ? r2UrlServer(data.first_image_key) : null);
+  if (type === 'video') {
+    const ytId = youtubeIdServer(data.video_url);
+    if (ytId) return `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
+    return data.first_image_key ? r2UrlServer(data.first_image_key) : null;
+  }
+  if (type === 'pdf') return data.thumb_url ? r2UrlServer(data.thumb_url) : null;
+  return data.first_image_key ? r2UrlServer(data.first_image_key) : null;
+}
+function dateDescServer(a, b) {
+  if (!a && !b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+  return b.localeCompare(a);
+}
+
+function renderHomeMosaicHtml(payload) {
+  const byType = {
+    post: [...(payload.posts || [])],
+    poster: [...(payload.posters || [])],
+    event: [...(payload.events || [])],
+    video: [...(payload.videos || [])],
+    pdf: [...(payload.pdfs || [])],
+  };
+  const allFlat = Object.entries(byType).flatMap(([type, arr]) => arr.map((data) => ({ type, data })));
+  allFlat.sort((a, b) => dateDescServer(a.data.date, b.data.date));
+  if (!allFlat.length) return null;
+
+  const chosen = [];
+  const chosenSet = new Set();
+  function add(type, data) {
+    const k = `${type}-${data.id}`;
+    if (chosenSet.has(k)) return;
+    chosenSet.add(k);
+    chosen.push({ type, data });
+  }
+  if (byType.post[0]) add('post', byType.post[0]);
+  ['poster', 'event', 'video', 'pdf'].forEach((t) => { if (byType[t][0]) add(t, byType[t][0]); });
+  for (const it of allFlat) {
+    if (chosen.length >= 10) break;
+    add(it.type, it.data);
+  }
+  chosen.sort((a, b) => dateDescServer(a.data.date, b.data.date));
+
+  const SIZE_BY_INDEX = { 0: 'mosaic-big', 2: 'mosaic-tall', 3: 'mosaic-wide', 7: 'mosaic-tall', 8: 'mosaic-wide' };
+  return chosen.map(({ type, data }, i) => {
+    const meta = HOME_TYPE_META[type];
+    const img = homeImageFor(type, data);
+    const sizeClass = SIZE_BY_INDEX[i] || '';
+    return `<a class="mosaic-item${sizeClass ? ' ' + sizeClass : ''}" href="${escapeHtmlMail(meta.href(data))}">
+      ${img ? `<div class="mosaic-media" style="background-image:url('${escapeHtmlMail(img)}')"></div>` : ''}
+      <div class="mosaic-overlay">
+        <span class="mosaic-badge">${meta.label}</span>
+        <div class="mosaic-title">${escapeHtmlMail(homeTitleFor(type, data))}</div>
+        <div class="mosaic-date">${isoToHebrewStringServer(data.date)}</div>
+      </div>
+    </a>`;
+  }).join('');
+}
+
+async function handleHomePage({ request, env, ctx }) {
+  const cache = caches.default;
+  const cacheKey = new Request('https://cache.internal/home-page-html');
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const assetResponse = await env.ASSETS.fetch(request);
+  if (!assetResponse.ok || !assetResponse.headers.get('content-type')?.includes('text/html')) return assetResponse;
+
+  const payload = await getHomeFeedPayload(env);
+  const mosaicHtml = renderHomeMosaicHtml(payload);
+  let html = await assetResponse.text();
+  if (mosaicHtml) {
+    html = html
+      .replace(
+        '<div class="mosaic" id="home-mosaic"><p class="state-msg">לאדט...</p></div>',
+        `<div class="mosaic" id="home-mosaic" data-ssr="1">${mosaicHtml}</div>`
+      )
+      // The mosaic is already visible the instant this HTML paints — the
+      // full-screen loading overlay (meant to cover the gap while it was
+      // being fetched/built client-side) would otherwise still sit on
+      // top of it until home.js's own JS gets around to hiding it.
+      .replace('<div id="loading-overlay">', '<div id="loading-overlay" class="hidden">');
+  }
+
+  const response = new Response(html, {
+    status: assetResponse.status,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=30' },
   });
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
   return response;
@@ -856,6 +1122,7 @@ async function bustContentCache(table) {
   await Promise.all([
     cache.delete(new Request(`https://cache.internal/content-list/${table}`)),
     cache.delete(new Request('https://cache.internal/home-feed')),
+    cache.delete(new Request('https://cache.internal/home-page-html')),
   ]);
 }
 
@@ -1884,6 +2151,7 @@ async function handleDeleteResponse({ match, env, user }) {
 // ── ROUTER ────────────────────────────────────────────────────────────
 
 const routes = [
+  ['GET', /^\/$/, handleHomePage],
   ['GET', /^\/api\/ping$/, handlePing],
   ['POST', /^\/api\/login$/, handleLogin],
   ['POST', /^\/api\/logout$/, handleLogout],
@@ -1893,6 +2161,7 @@ const routes = [
   ['POST', /^\/api\/refresh$/, handleRefresh],
   ['GET', /^\/api\/users$/, handleListUsers],
   ['POST', /^\/api\/users$/, handleCreateUser],
+  ['DELETE', /^\/api\/users\/(\d+)$/, handleDeleteUser],
   ['GET', /^\/api\/users\/(\d+)\/permissions$/, handleGetUserPermissions],
   ['PUT', /^\/api\/users\/(\d+)\/permissions$/, handleSetUserPermissions],
   ['PUT', /^\/api\/users\/(\d+)\/password$/, handleSetUserPassword],
