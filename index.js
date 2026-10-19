@@ -2151,7 +2151,10 @@ async function handleDeleteResponse({ match, env, user }) {
 // ── ROUTER ────────────────────────────────────────────────────────────
 
 const routes = [
-  ['GET', /^\/$/, handleHomePage],
+  // handleHomePage (SSR'd mosaic) is intentionally NOT routed right now —
+  // see the comment in wrangler.toml's [assets] block. "/" is served
+  // directly by Cloudflare's static-assets layer, same as every other
+  // file in public/, until that's sorted out.
   ['GET', /^\/api\/ping$/, handlePing],
   ['POST', /^\/api\/login$/, handleLogin],
   ['POST', /^\/api\/logout$/, handleLogout],
