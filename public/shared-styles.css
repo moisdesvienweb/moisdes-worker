@@ -684,6 +684,7 @@ audio { width: 100%; max-width: 400px; margin-top: .5rem; }
 }
 .widget-title { font-weight: 700; margin-bottom: .05rem; font-size: .95rem; }
 .widget-eng-date { direction: ltr; text-align: right; font-size: .68rem; color: var(--ink-faint); margin-bottom: .35rem; }
+.widget-sub-date { font-size: .7rem; color: var(--ink-faint); margin-bottom: .35rem; }
 /* Falls back to a single column automatically once the box is narrow
    (sidebar on desktop, most phones) — flattens into 2-3 columns
    whenever there's width to spare (full-width on tablets, wide phones). */

@@ -223,25 +223,32 @@
     });
   }
 
-  // ── DAF TODAY (ובהם נהגה) — follows the same shkia+72 rollover as the
-  // Hebrew date above, since this is a "daily" program in the halachic sense.
+  // ── DAF TODAY (ובהם נהגה) — rolls over at a fixed 2:00 AM local time
+  // (not sunset+72 like the Hebrew-date/zmanim widget — this one's tied
+  // to a daily upload schedule, not a halachic day), so no geolocation
+  // is needed for it at all.
+  const DAF_DAY_NAMES = ['זונטאג', 'מאנטאג', 'דינסטאג', 'מיטוואך', 'דאנערשטאג', 'פרייטאג', 'שבת'];
+  function dafEffectiveDate() {
+    const now = new Date();
+    if (now.getHours() < 2) now.setDate(now.getDate() - 1);
+    return now;
+  }
   async function loadDaf() {
     const dafEl = document.getElementById('daf-widget');
     if (!dafEl) return;
     try {
       const { entries } = await api.get('/api/daf-entries');
-      const effectiveIso = await new Promise((resolve) => {
-        if (!window.MOISDES.zmanim) return resolve(util.localIso());
-        window.MOISDES.zmanim.withLocation((loc) => {
-          resolve(window.MOISDES.zmanim.currentHebrewDateDisplay(loc.lat, loc.lon, loc.elevation).effectiveIso);
-        });
-      });
+      const effectiveDate = dafEffectiveDate();
+      const effectiveIso = util.localIso(effectiveDate);
+      const dayName = DAF_DAY_NAMES[effectiveDate.getDay()];
+      const hebrewDate = window.MOISDES.hebrew ? window.MOISDES.hebrew.isoToHebrewString(effectiveIso) : '';
       const entry = entries.find((e) => e.date === effectiveIso);
       dafEl.innerHTML = `
         <div class="daf-widget-row">
           <img class="daf-source-logo" src="/daf-logo.png" alt="חבורת ובהם נהגה">
           <div class="daf-widget-content">
             <div class="widget-title">ובהם נהגה</div>
+            <div class="widget-sub-date">${util.eh(dayName)}${hebrewDate ? ', ' + util.eh(hebrewDate) : ''}</div>
             <div>${entry ? util.eh(entry.text) : 'נאך נישט אריינגעשטעלט'}</div>
           </div>
         </div>

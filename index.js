@@ -2222,6 +2222,15 @@ async function handleRequest(request, env, ctx) {
     const match = pattern.exec(url.pathname);
     if (match) return handler({ request, env, ctx, url, match, user });
   }
+  // Belt-and-suspenders fallback: every static file is normally served
+  // directly by Cloudflare's edge without ever reaching this Worker (only
+  // "/" is routed through first — see wrangler.toml's run_worker_first).
+  // If that ever changes, or something else unmatched slips through,
+  // hand any non-API GET to the asset binding instead of a bare 404 —
+  // keeps a real request for a real file working either way.
+  if (request.method === 'GET' && !url.pathname.startsWith('/api/') && env.ASSETS) {
+    return env.ASSETS.fetch(request);
+  }
   return json({ error: 'Not found' }, 404);
 }
 
