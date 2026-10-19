@@ -53,44 +53,65 @@ window.MOISDES.adminUpload = (function () {
     node.className = 'status-msg' + (ok === true ? ' ok' : ok === false ? ' err' : '');
   }
 
-  // Loads the Google Maps JS API (places library) exactly once per page —
-  // cached as a promise so every calendar-tab render after the first
-  // reuses the same load instead of re-injecting the script tag.
-  let gmapsLoadPromise = null;
-  function loadGoogleMaps(apiKey) {
-    if (window.google?.maps?.places) return Promise.resolve();
-    if (gmapsLoadPromise) return gmapsLoadPromise;
-    gmapsLoadPromise = new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places`;
-      script.async = true;
-      script.onload = () => resolve();
-      script.onerror = () => { gmapsLoadPromise = null; reject(new Error('Failed to load Google Maps')); };
-      document.head.appendChild(script);
-    });
-    return gmapsLoadPromise;
-  }
-
-  // Plain text input that upgrades itself to a Google Places autocomplete
-  // field once a Maps API key is configured in Settings — degrades to a
-  // normal free-text location field (no error) when no key is set yet.
+  // Plain text input that upgrades itself to Google address suggestions
+  // once a Maps API key is configured in Settings — degrades to a normal
+  // free-text location field (no error) when no key is set yet.
+  //
+  // This calls the Places API "Autocomplete (New)" REST endpoint directly
+  // with fetch() and renders its own dropdown, rather than loading
+  // Google's Maps JavaScript API and using its `google.maps.places.
+  // Autocomplete` widget — that legacy widget stopped being issued to API
+  // keys created after March 2025, so it silently never attaches for any
+  // key made after that (which is exactly why it looked broken). The
+  // REST endpoint it calls instead works for every key, old or new.
   function locationAutocompleteInput(initialValue) {
-    const wrap = el('div');
+    const wrap = el('div', 'location-autocomplete');
     const input = textInput('Start typing an address…', initialValue);
     wrap.appendChild(input);
+    const suggestionsEl = el('div', 'location-suggestions');
+    wrap.appendChild(suggestionsEl);
     const hint = el('div', 'state-msg', '');
     wrap.appendChild(hint);
 
+    let apiKey = null;
     api.get('/api/settings').then(({ settings }) => {
-      const key = settings.gmaps_api_key;
-      if (!key) {
-        hint.textContent = 'Tip: add a Google Maps API key in Settings to get address autocomplete here.';
-        return;
-      }
-      loadGoogleMaps(key).then(() => {
-        new google.maps.places.Autocomplete(input, { fields: ['formatted_address', 'name'] });
-      }).catch(() => { hint.textContent = 'Could not load Google Maps autocomplete.'; });
+      apiKey = settings.gmaps_api_key || null;
+      if (!apiKey) hint.textContent = 'Tip: add a Google Maps API key in Settings to get address suggestions here.';
     }).catch(() => {});
+
+    function hideSuggestions() { suggestionsEl.style.display = 'none'; suggestionsEl.innerHTML = ''; }
+
+    async function fetchSuggestions(text) {
+      if (!apiKey || !text.trim()) { hideSuggestions(); return; }
+      try {
+        const res = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': apiKey },
+          body: JSON.stringify({ input: text }),
+        });
+        const data = await res.json().catch(() => ({}));
+        const items = (data.suggestions || []).map((s) => s.placePrediction?.text?.text).filter(Boolean);
+        if (!items.length) { hideSuggestions(); return; }
+        suggestionsEl.innerHTML = '';
+        items.forEach((text) => {
+          const item = document.createElement('div');
+          item.className = 'location-suggestion-item';
+          item.textContent = text;
+          // mousedown (not click) fires before the input's blur, so the
+          // suggestion is still in the DOM to be clicked.
+          item.addEventListener('mousedown', (e) => { e.preventDefault(); input.value = text; hideSuggestions(); });
+          suggestionsEl.appendChild(item);
+        });
+        suggestionsEl.style.display = 'block';
+      } catch (e) { hideSuggestions(); }
+    }
+
+    let debounceTimer;
+    input.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => fetchSuggestions(input.value), 300);
+    });
+    input.addEventListener('blur', () => setTimeout(hideSuggestions, 150));
 
     return { wrap, getValue: () => input.value.trim() };
   }
@@ -156,9 +177,12 @@ window.MOISDES.adminUpload = (function () {
     // this is almost certainly what's been reported as files "uploading"
     // or the record saving before the Publish/Save button is clicked.
     // Only an actual click (or Enter while focused on the submit button
-    // itself) should submit.
+    // itself) should submit. A rich-text body/description field is a
+    // contenteditable <div>, not a <textarea> — excluded here too, since
+    // otherwise this same guard was swallowing Enter inside it and
+    // silently blocking new lines/paragraphs from ever being typed.
     form.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && e.target.type !== 'submit') {
+      if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && e.target.type !== 'submit' && !e.target.isContentEditable) {
         e.preventDefault();
       }
     });

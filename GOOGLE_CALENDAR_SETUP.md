@@ -69,25 +69,32 @@ popup and nothing that expires.
 That's it for Part 1 — once that secret is set, the Calendar tab in
 Admin → Upload will create real events on your Google Calendar.
 
-## Part 2 — Google Maps autocomplete for the Location field (optional)
+## Part 2 — Google Maps address suggestions for the Location field (optional)
 
 Without this, the Location field on the Calendar tab is still a normal
 text box — you can type any address or venue name by hand. This step
-just adds the address-autocomplete dropdown (Google Maps' own "start
-typing an address" suggestions).
+adds the address-suggestions dropdown as you type.
 
-1. In the same Google Cloud project, go to "APIs & Services" → "Library"
-   → search **Places API** → **Enable**.
-2. Go to "APIs & Services" → "Credentials" → **Create Credentials** →
+1. **Enable billing on the Google Cloud project** (Billing → link a
+   billing account). Every Google Maps Platform API requires this even
+   though there's a monthly free usage tier — without it, the key will
+   fail with a billing error no matter what else is set up correctly.
+2. In the same project, go to "APIs & Services" → "Library" → search
+   **Places API (New)** → **Enable**.
+   - Note: this is a different product from the plain "Places API" (no
+     "(New)") — make sure you enable the one with "(New)" in the name.
+     The admin's address field calls this one directly over HTTPS; it
+     doesn't load any Google Maps JavaScript on the page at all.
+3. Go to "APIs & Services" → "Credentials" → **Create Credentials** →
    **API key**.
-3. Click the new key to restrict it (recommended, not required):
+4. Click the new key to restrict it (recommended, not required):
    - Under "Application restrictions" choose **Websites** and add
      `chatzarvien.org/*`.
    - Under "API restrictions" choose **Restrict key** and select
-     **Places API**.
+     **Places API (New)**.
    - Save.
-4. Copy the key (starts with `AIza...`).
-5. In the site admin: **Settings → Google Maps API key** → paste it in →
+5. Copy the key (starts with `AIza...`).
+6. In the site admin: **Settings → Google Maps API key** → paste it in →
    **Save**.
 
 No code change or redeploy needed for this part — it's read from your

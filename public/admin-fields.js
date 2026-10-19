@@ -205,15 +205,33 @@ window.MOISDES.adminFields = (function () {
     input.type = 'text';
     input.placeholder = 'Add a new tag and press Enter';
 
+    // Renames a tag everywhere — the shared tag list and every post/
+    // event/video already published with it — not just in this one
+    // field, since a typo'd tag is usually wrong on past items too, not
+    // only whatever's being edited right now.
+    function renameTag(oldName) {
+      const next = prompt(`Rename tag "${oldName}" to:`, oldName);
+      if (next === null) return;
+      const trimmed = next.trim();
+      if (!trimmed || trimmed === oldName) return;
+      api.put('/api/tags/rename', { from: oldName, to: trimmed }).then(() => {
+        allTags = [...new Set(allTags.map((t) => (t === oldName ? trimmed : t)))];
+        selected = [...new Set(selected.map((t) => (t === oldName ? trimmed : t)))];
+        render();
+      }).catch((e) => alert(e.message || 'Could not rename tag.'));
+    }
+
     function render() {
       pillsEl.innerHTML = '';
       [...new Set(allTags)].sort((a, b) => a.localeCompare(b)).forEach((t) => {
         const isSelected = selected.includes(t);
         const pill = el('button', 'pill pill-toggle' + (isSelected ? ' active' : ''), t);
+        pill.title = 'Click to toggle · double-click to rename';
         pill.addEventListener('click', () => {
           selected = isSelected ? selected.filter((x) => x !== t) : [...selected, t];
           render();
         });
+        pill.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); renameTag(t); });
         pillsEl.appendChild(pill);
       });
     }

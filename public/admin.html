@@ -178,6 +178,16 @@
     <!-- ===================== USERS ===================== -->
     <section class="panel" id="panel-users">
       <h1>Users</h1>
+
+      <h2>Change my password</h2>
+      <form id="change-password-form" class="inline-form" autocomplete="off" style="flex-direction:column;align-items:flex-start;gap:.75rem;max-width:360px">
+        <input type="password" id="cp-current" name="cp-current" placeholder="Current password" autocomplete="current-password" required>
+        <input type="password" id="cp-new" name="cp-new" placeholder="New password (min 6 characters)" autocomplete="new-password" required>
+        <button type="submit" class="btn btn-primary">Update password</button>
+      </form>
+      <div class="state-msg" id="change-password-msg"></div>
+
+      <h2 style="margin-top:2rem">All users</h2>
       <form id="new-user-form" class="inline-form" autocomplete="off">
         <input type="text" id="nu-name" name="new-user-name" placeholder="Name" autocomplete="off" required>
         <input type="email" id="nu-email" name="new-user-email" placeholder="Email" autocomplete="off" required>

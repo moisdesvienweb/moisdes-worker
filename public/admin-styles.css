@@ -106,6 +106,15 @@ h2 { font-size: 1.05rem; margin: 0 0 .75rem; }
 
 /* ── RICH TEXT EDITOR (richtext.js) ────────────────────────────────── */
 
+.location-autocomplete { position: relative; }
+.location-suggestions {
+  display: none; position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 20;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  max-height: 220px; overflow-y: auto; box-shadow: 0 6px 18px rgba(13, 32, 60, .12);
+}
+.location-suggestion-item { padding: .5rem .7rem; font-size: .85rem; color: var(--ink); cursor: pointer; }
+.location-suggestion-item:hover { background: var(--panel-2); color: var(--accent); }
+
 .rte-wrap { border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--panel-2); }
 .rte-toolbar {
   display: flex; flex-wrap: wrap; gap: .25rem; padding: .4rem; border-bottom: 1px solid var(--line);

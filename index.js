@@ -490,17 +490,14 @@ function requireUser(user) {
   if (!user) throw new HttpError('Unauthorized', 401);
   return user;
 }
-function requireAdmin(user) {
-  requireUser(user);
-  if (user.role !== 'admin' && user.role !== 'superadmin') throw new HttpError('Forbidden', 403);
-  return user;
-}
-
 // Every admin-panel section an editor's access can be scoped to. "users"
-// (creating/editing accounts and granting permissions) is deliberately
-// left out — that stays admin/superadmin-only, not delegable, since it's
-// the one section that could otherwise be used to self-escalate.
-const SECTIONS = ['posts', 'posters', 'events', 'videos', 'pdfs', 'simchas', 'forms', 'daf', 'settings', 'emails', 'calendar'];
+// is delegable like any other section (an admin can grant an editor the
+// ability to add accounts / manage permissions) — but see the escalation
+// guards in handleCreateUser/handleSetUserPermissions/handleSetUserPassword
+// below: a non-full-access holder of users:write still can't create or
+// touch an admin/superadmin account, so granting it can't be used to
+// self-escalate past "editor".
+const SECTIONS = ['posts', 'posters', 'events', 'videos', 'pdfs', 'simchas', 'forms', 'daf', 'settings', 'emails', 'calendar', 'users'];
 
 // admin/superadmin always get full read+write on every section; an
 // 'editor' gets exactly what's stored for them in user_permissions (no
@@ -624,8 +621,27 @@ async function handleRefresh({ request, env, user }) {
   return json({ token, expires, user, permissions });
 }
 
+// Full account management (admin/superadmin) always passes. A delegated
+// users:write editor passes too, but only against a target who is
+// themselves a plain editor — touching an admin/superadmin account (or
+// creating a new one) always needs full access, so delegating users:write
+// can't be turned into a path to escalate to admin.
+function isFullAccess(user) {
+  return user.role === 'admin' || user.role === 'superadmin';
+}
+async function requireUsersWriteOnTarget(env, user, targetRole) {
+  if (isFullAccess(user)) return;
+  await requireSection(env, user, 'users', 'write');
+  if (targetRole === 'admin' || targetRole === 'superadmin') {
+    throw new HttpError("You don't have permission to manage an admin account", 403);
+  }
+}
+
+// The user list itself is visible to anyone logged in — only the actions
+// below (add a user, change permissions, reset someone else's password)
+// need the delegable users:write permission.
 async function handleListUsers({ env, user }) {
-  requireAdmin(user);
+  requireUser(user);
   const { results } = await env.DB.prepare(
     'SELECT id,name,email,role,active,created_at FROM users ORDER BY id'
   ).all();
@@ -633,19 +649,19 @@ async function handleListUsers({ env, user }) {
 }
 
 async function handleGetUserPermissions({ match, env, user }) {
-  requireAdmin(user);
   const targetId = Number(match[1]);
   const target = await env.DB.prepare('SELECT id, role FROM users WHERE id = ?').bind(targetId).first();
   if (!target) throw new HttpError('User not found', 404);
+  await requireUsersWriteOnTarget(env, user, target.role);
   const permissions = await getEffectivePermissions(env, { id: targetId, role: target.role });
   return json({ role: target.role, permissions });
 }
 
 async function handleSetUserPermissions({ match, request, env, user }) {
-  requireAdmin(user);
   const targetId = Number(match[1]);
-  const target = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetId).first();
+  const target = await env.DB.prepare('SELECT id, role FROM users WHERE id = ?').bind(targetId).first();
   if (!target) throw new HttpError('User not found', 404);
+  await requireUsersWriteOnTarget(env, user, target.role);
   const body = await request.json().catch(() => ({}));
   const permissions = body.permissions || {};
   for (const section of SECTIONS) {
@@ -659,10 +675,10 @@ async function handleSetUserPermissions({ match, request, env, user }) {
 }
 
 async function handleSetUserPassword({ match, request, env, user }) {
-  requireAdmin(user);
   const targetId = Number(match[1]);
-  const target = await env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetId).first();
+  const target = await env.DB.prepare('SELECT id, role FROM users WHERE id = ?').bind(targetId).first();
   if (!target) throw new HttpError('User not found', 404);
+  await requireUsersWriteOnTarget(env, user, target.role);
   const body = await request.json().catch(() => ({}));
   const password = String(body.password || '');
   if (password.length < 6) throw new HttpError('Password must be at least 6 characters', 400);
@@ -675,13 +691,40 @@ async function handleSetUserPassword({ match, request, env, user }) {
   return json({ ok: true });
 }
 
+// Self-service — any logged-in user, of any role, changing their own
+// password. Separate from handleSetUserPassword above (an admin-driven
+// reset of someone ELSE's password): this one needs the current password
+// instead of a permission check, since proving you already know the old
+// password is what makes this safe for literally everyone to call on
+// themselves, write permission or not.
+async function handleChangeOwnPassword({ request, env, user }) {
+  requireUser(user);
+  const body = await request.json().catch(() => ({}));
+  const currentPassword = String(body.currentPassword || '');
+  const newPassword = String(body.newPassword || '');
+  if (newPassword.length < 6) throw new HttpError('New password must be at least 6 characters', 400);
+  const row = await env.DB.prepare('SELECT password_hash FROM users WHERE id = ?').bind(user.id).first();
+  if (!row || !(await verifyPassword(currentPassword, row.password_hash))) {
+    throw new HttpError('Current password is incorrect', 401);
+  }
+  const hash = await hashPassword(newPassword);
+  await env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(hash, user.id).run();
+  // Drop every OTHER session on this account (same reasoning as an admin
+  // reset — a changed password should actually log out anyone else using
+  // the old one) but keep the session making this very request valid, so
+  // changing your own password doesn't also log yourself out.
+  const token = bearerToken(request);
+  await env.DB.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').bind(user.id, token).run();
+  return json({ ok: true });
+}
+
 async function handleCreateUser({ request, env, user }) {
-  requireAdmin(user);
   const body = await request.json().catch(() => ({}));
   const name = String(body.name || '').trim();
   const email = String(body.email || '').trim().toLowerCase();
   const password = String(body.password || '');
   const role = String(body.role || 'editor');
+  await requireUsersWriteOnTarget(env, user, role);
   if (!name || !email || !password) throw new HttpError('Missing required fields', 400);
 
   const hash = await hashPassword(password);
@@ -714,8 +757,53 @@ async function saveNewTaxonomy(body, env) {
 
 const ORDER_COLUMN = { simchas: 'date_added' };
 
-async function handleListContent({ match, url, env, user }) {
+// One combined read for the home page's mosaic instead of five separate
+// requests (posts/posters/events/videos/pdfs each as their own round
+// trip) — same data, one network round trip. Capped at the 60 most
+// recent per type, which is already far more than the home page's mosaic
+// + "more news" strip ever show; a full, uncapped list per type is still
+// available from each type's own /api/<type> endpoint (used by Browse &
+// Edit and the dedicated section pages).
+async function handleHomeFeed({ env, ctx }) {
+  const cache = caches.default;
+  const cacheKey = new Request('https://cache.internal/home-feed');
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  const tables = ['posts', 'posters', 'events', 'videos', 'pdfs'];
+  const resultsArr = await Promise.all(tables.map((t) => {
+    const orderCol = ORDER_COLUMN[t] || 'date';
+    return env.DB.prepare(
+      `SELECT * FROM ${t} WHERE deleted_at IS NULL ORDER BY ${orderCol} DESC, id DESC LIMIT 60`
+    ).all();
+  }));
+  const payload = {};
+  tables.forEach((t, i) => { payload[t] = resultsArr[i].results; });
+
+  const response = new Response(JSON.stringify(payload), {
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=30' },
+  });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+}
+
+async function handleListContent({ match, url, env, user, ctx }) {
   const table = match[1];
+  const isCsv = url.searchParams.get('format') === 'csv';
+
+  // Anonymous reads (the public site's own pages) are cached for a short
+  // while — this is the same data on every request until someone
+  // publishes/edits, so there's no reason to hit D1 for every single page
+  // view. Authenticated requests (admin Browse & Edit, which also needs
+  // the uploaded_by attribution below) always go straight to D1 instead,
+  // since that attribution must never leak into a cache shared by anyone.
+  const cache = caches.default;
+  const cacheKey = new Request(`https://cache.internal/content-list/${table}`);
+  if (!user && !isCsv) {
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+  }
+
   const orderCol = ORDER_COLUMN[table] || 'date';
   const { results } = await env.DB.prepare(
     `SELECT * FROM ${table} WHERE deleted_at IS NULL ORDER BY ${orderCol} DESC, id DESC`
@@ -740,7 +828,7 @@ async function handleListContent({ match, url, env, user }) {
     } catch (e) { /* not authorized for this section — no attribution attached */ }
   }
 
-  if (url.searchParams.get('format') === 'csv') {
+  if (isCsv) {
     const cols = ['id', ...CONTENT_FIELDS[table]];
     const lines = [cols.map(csvEscape).join(',')];
     for (const r of results) lines.push(cols.map((c) => csvEscape(r[c])).join(','));
@@ -748,7 +836,27 @@ async function handleListContent({ match, url, env, user }) {
       headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${table}.csv"` },
     });
   }
+
+  if (!user) {
+    const response = new Response(JSON.stringify({ [table]: results }), {
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=30' },
+    });
+    ctx.waitUntil(cache.put(cacheKey, response.clone()));
+    return response;
+  }
   return json({ [table]: results });
+}
+
+// Clears handleListContent's/handleHomeFeed's cached public reads for a
+// table right after a write to it, instead of leaving a stale list up for
+// however long is left on its TTL — a freshly-published item should show
+// up on the live site immediately, not after a wait.
+async function bustContentCache(table) {
+  const cache = caches.default;
+  await Promise.all([
+    cache.delete(new Request(`https://cache.internal/content-list/${table}`)),
+    cache.delete(new Request('https://cache.internal/home-feed')),
+  ]);
 }
 
 async function handleCreateContent({ match, request, env, user }) {
@@ -762,6 +870,7 @@ async function handleCreateContent({ match, request, env, user }) {
   const res = await env.DB.prepare(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${placeholders})`)
     .bind(...vals).run();
   await saveNewTaxonomy(body, env);
+  await bustContentCache(table);
   return json({ ok: true, id: res.meta.last_row_id });
 }
 
@@ -775,6 +884,7 @@ async function handleUpdateContent({ match, request, env, user }) {
   const vals = fields.map((f) => body[f] ?? '');
   await env.DB.prepare(`UPDATE ${table} SET ${sets} WHERE id = ?`).bind(...vals, id).run();
   await saveNewTaxonomy(body, env);
+  await bustContentCache(table);
   return json({ ok: true });
 }
 
@@ -783,12 +893,54 @@ async function handleDeleteContent({ match, env, user }) {
   await requireSection(env, user, table, 'write');
   const id = match[2];
   await env.DB.prepare(`UPDATE ${table} SET deleted_at = datetime('now') WHERE id = ?`).bind(id).run();
+  await bustContentCache(table);
   return json({ ok: true });
 }
 
 async function handleTags({ env }) {
   const { results } = await env.DB.prepare('SELECT name FROM tags ORDER BY name').all();
   return json({ tags: results.map((r) => r.name) });
+}
+
+// Renames a tag everywhere at once: the shared `tags` registry (so it
+// shows up under its new name in every picker going forward) and every
+// already-published post/event/video that had the old name in its own
+// comma-separated tags column — otherwise a rename would only affect
+// future uploads and leave every existing item still labeled with the
+// old name.
+async function renameTagInContentTable(env, table, from, to) {
+  const { results } = await env.DB.prepare(`SELECT id, tags FROM ${table} WHERE tags LIKE ?`).bind(`%${from}%`).all();
+  for (const row of results) {
+    const list = (row.tags || '').split(',').map((t) => t.trim()).filter(Boolean);
+    if (!list.includes(from)) continue; // LIKE can match a substring of a different tag — only touch an exact token
+    const updated = [...new Set(list.map((t) => (t === from ? to : t)))];
+    await env.DB.prepare(`UPDATE ${table} SET tags = ? WHERE id = ?`).bind(updated.join(', '), row.id).run();
+  }
+}
+
+async function handleRenameTag({ request, env, user }) {
+  requireUser(user);
+  const perms = await getEffectivePermissions(env, user);
+  // Tags aren't their own section — they're shared across posts/events/
+  // videos — so renaming one just needs write access to at least one of
+  // those, same bar as adding a new tag already clears today.
+  if (!perms.posts?.write && !perms.events?.write && !perms.videos?.write) {
+    throw new HttpError("You don't have write access to tags", 403);
+  }
+  const body = await request.json().catch(() => ({}));
+  const from = String(body.from || '').trim();
+  const to = String(body.to || '').trim();
+  if (!from || !to) throw new HttpError('Both the old and new tag name are required', 400);
+  if (from === to) return json({ ok: true });
+
+  await env.DB.prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)').bind(to).run();
+  await env.DB.prepare('DELETE FROM tags WHERE name = ?').bind(from).run();
+
+  for (const table of ['posts', 'events', 'videos']) {
+    await renameTagInContentTable(env, table, from, to);
+    await bustContentCache(table);
+  }
+  return json({ ok: true });
 }
 
 async function handleCategories({ env }) {
@@ -1045,9 +1197,19 @@ function icsLocalDateStr(dtstart) {
   }).format(new Date(dtstart.iso));
 }
 
-async function handleGcalEvents({ env }) {
+async function handleGcalEvents({ env, ctx }) {
   const calendarId = env.GCAL_CALENDAR_ID;
   if (!calendarId) throw new HttpError('GCAL_CALENDAR_ID is not configured on the Worker', 500);
+
+  // This was being re-fetched + re-parsed from Google on every single page
+  // load (home page's "upcoming" strip included) — a slow external fetch
+  // for data that only changes when someone edits the calendar. Cached the
+  // same way the Hebcal endpoints already are.
+  const cache = caches.default;
+  const cacheKey = new Request(`https://cache.internal/gcal-events?id=${encodeURIComponent(calendarId)}`);
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
   const url = `https://calendar.google.com/calendar/ical/${encodeURIComponent(calendarId)}/public/basic.ics`;
 
   const res = await fetch(url);
@@ -1078,7 +1240,11 @@ async function handleGcalEvents({ env }) {
   // upcoming events filter client-side (this also feeds a full month-grid
   // calendar view, which needs past dates too).
   events.sort((a, b) => a.start.localeCompare(b.start));
-  return json({ events: events.slice(0, 300) });
+  const response = new Response(JSON.stringify({ events: events.slice(0, 300) }), {
+    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=600' },
+  });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
 }
 
 async function handleGcalSubscribeUrl({ env }) {
@@ -1187,6 +1353,11 @@ async function handleCreateGcalEvent({ request, env, user }) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new HttpError(`Google Calendar rejected the event: ${data.error?.message || 'unknown error'}`, 502);
+
+  // So the event just created shows up immediately instead of waiting out
+  // handleGcalEvents' 10-minute cache.
+  const cache = caches.default;
+  await cache.delete(new Request(`https://cache.internal/gcal-events?id=${encodeURIComponent(calendarId)}`));
 
   return json({ ok: true, event: { id: data.id, htmlLink: data.htmlLink } });
 }
@@ -1725,7 +1896,9 @@ const routes = [
   ['GET', /^\/api\/users\/(\d+)\/permissions$/, handleGetUserPermissions],
   ['PUT', /^\/api\/users\/(\d+)\/permissions$/, handleSetUserPermissions],
   ['PUT', /^\/api\/users\/(\d+)\/password$/, handleSetUserPassword],
+  ['PUT', /^\/api\/me\/password$/, handleChangeOwnPassword],
   ['GET', /^\/api\/tags$/, handleTags],
+  ['PUT', /^\/api\/tags\/rename$/, handleRenameTag],
   ['GET', /^\/api\/categories$/, handleCategories],
   ['GET', /^\/api\/parshiyot-custom$/, handleCustomParshiyot],
   ['GET', /^\/api\/r2-list$/, handleR2List],
@@ -1749,6 +1922,7 @@ const routes = [
   ['DELETE', /^\/api\/forms\/(\d+)\/responses\/(\d+)$/, handleDeleteResponse],
   ['PUT', /^\/api\/forms\/(\d+)$/, handleUpdateForm],
   ['DELETE', /^\/api\/forms\/(\d+)$/, handleDeleteForm],
+  ['GET', /^\/api\/home-feed$/, handleHomeFeed],
   ['GET', /^\/api\/(posts|posters|events|videos|pdfs|simchas)$/, handleListContent],
   ['POST', /^\/api\/(posts|posters|events|videos|pdfs|simchas)$/, handleCreateContent],
   ['PUT', /^\/api\/(posts|posters|events|videos|pdfs|simchas)\/(\d+)$/, handleUpdateContent],

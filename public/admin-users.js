@@ -8,14 +8,23 @@ window.MOISDES = window.MOISDES || {};
 window.MOISDES.adminUsers = (function () {
   const api = window.MOISDES.api;
 
-  // Must match the Worker's SECTIONS list (index.js) — "users" itself is
-  // deliberately not delegable, so it isn't in this list.
+  // Must match the Worker's SECTIONS list (index.js). "users" is
+  // delegable like everything else here, but the backend still blocks a
+  // delegated users:write holder from touching an admin/superadmin
+  // account or creating a new one — see requireUsersWriteOnTarget there.
   const SECTIONS = [
     ['posts', 'Blog'], ['posters', 'Posters'], ['events', 'Events'],
     ['videos', 'Videos'], ['pdfs', 'PDFs'], ['simchas', 'Simchas'],
     ['forms', 'Forms'], ['daf', 'Daf Calendar'], ['settings', 'Settings'],
-    ['emails', 'Email Center'],
+    ['emails', 'Email Center'], ['calendar', 'Calendar'], ['users', 'Users'],
   ];
+
+  // Full admin/superadmin, or a delegated users:write grant.
+  function canManageUsers() {
+    const role = api.getUser()?.role;
+    if (role === 'admin' || role === 'superadmin') return true;
+    return !!api.getPermissions()?.users?.write;
+  }
 
   function escapeHtml(s) {
     return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -121,9 +130,12 @@ window.MOISDES.adminUsers = (function () {
     }
   }
 
+  // The list itself is visible to everyone who's logged in — only the
+  // per-row actions below are gated to whoever can actually manage users.
   async function load() {
     const tbody = document.querySelector('#users-table tbody');
     tbody.innerHTML = '<tr><td colspan="6">Loading…</td></tr>';
+    const canManage = canManageUsers();
     try {
       const { users } = await api.get('/api/users');
       tbody.innerHTML = '';
@@ -136,21 +148,27 @@ window.MOISDES.adminUsers = (function () {
           <td>${u.active ? 'Yes' : 'No'}</td>
           <td>${escapeHtml((u.created_at || '').slice(0, 10))}</td>`;
         const actionsTd = document.createElement('td');
-        if (u.role === 'editor') {
-          const permBtn = document.createElement('button');
-          permBtn.type = 'button';
-          permBtn.className = 'btn btn-sm';
-          permBtn.textContent = 'Permissions';
-          permBtn.addEventListener('click', () => openPermissions(u, tr));
-          actionsTd.appendChild(permBtn);
+        // A delegated users:write editor can't touch an admin/superadmin
+        // account anyway (the backend blocks it) — hide those actions for
+        // them here too rather than show a button that'll just 403.
+        const canActOnThisUser = canManage && (u.role === 'editor' || api.getUser()?.role === 'admin' || api.getUser()?.role === 'superadmin');
+        if (canActOnThisUser) {
+          if (u.role === 'editor') {
+            const permBtn = document.createElement('button');
+            permBtn.type = 'button';
+            permBtn.className = 'btn btn-sm';
+            permBtn.textContent = 'Permissions';
+            permBtn.addEventListener('click', () => openPermissions(u, tr));
+            actionsTd.appendChild(permBtn);
+          }
+          const pwBtn = document.createElement('button');
+          pwBtn.type = 'button';
+          pwBtn.className = 'btn btn-sm';
+          pwBtn.textContent = 'Set password';
+          pwBtn.style.marginInlineStart = u.role === 'editor' ? '.4rem' : '0';
+          pwBtn.addEventListener('click', () => setPassword(u));
+          actionsTd.appendChild(pwBtn);
         }
-        const pwBtn = document.createElement('button');
-        pwBtn.type = 'button';
-        pwBtn.className = 'btn btn-sm';
-        pwBtn.textContent = 'Set password';
-        pwBtn.style.marginInlineStart = u.role === 'editor' ? '.4rem' : '0';
-        pwBtn.addEventListener('click', () => setPassword(u));
-        actionsTd.appendChild(pwBtn);
         tr.appendChild(actionsTd);
         tbody.appendChild(tr);
       });
@@ -159,31 +177,65 @@ window.MOISDES.adminUsers = (function () {
     }
   }
 
-  function init() {
-    const form = document.getElementById('new-user-form');
-    const msg = document.getElementById('users-msg');
-
+  // Every logged-in user, any role, can change their own password — this
+  // never touches /api/users (which the backend still gates behind
+  // users:write); it's a separate self-service endpoint.
+  function initChangeOwnPassword() {
+    const form = document.getElementById('change-password-form');
+    const msg = document.getElementById('change-password-msg');
+    if (!form) return;
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       msg.textContent = '';
       const btn = form.querySelector('button[type=submit]');
       btn.disabled = true;
       try {
-        await api.post('/api/users', {
-          name: document.getElementById('nu-name').value.trim(),
-          email: document.getElementById('nu-email').value.trim(),
-          password: document.getElementById('nu-password').value,
-          role: document.getElementById('nu-role').value,
+        await api.put('/api/me/password', {
+          currentPassword: document.getElementById('cp-current').value,
+          newPassword: document.getElementById('cp-new').value,
         });
-        msg.textContent = 'User created.';
-        msg.className = 'state-msg';
+        msg.textContent = 'Password updated.';
+        msg.className = 'state-msg ok';
         form.reset();
-        load();
       } catch (err) {
-        msg.textContent = err.message || 'Could not create user.';
+        msg.textContent = err.message || 'Could not update password.';
+        msg.className = 'state-msg err';
       }
       btn.disabled = false;
     });
+  }
+
+  function init() {
+    initChangeOwnPassword();
+
+    const form = document.getElementById('new-user-form');
+    const msg = document.getElementById('users-msg');
+
+    if (!canManageUsers()) {
+      form.style.display = 'none';
+    } else {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        msg.textContent = '';
+        const btn = form.querySelector('button[type=submit]');
+        btn.disabled = true;
+        try {
+          await api.post('/api/users', {
+            name: document.getElementById('nu-name').value.trim(),
+            email: document.getElementById('nu-email').value.trim(),
+            password: document.getElementById('nu-password').value,
+            role: document.getElementById('nu-role').value,
+          });
+          msg.textContent = 'User created.';
+          msg.className = 'state-msg';
+          form.reset();
+          load();
+        } catch (err) {
+          msg.textContent = err.message || 'Could not create user.';
+        }
+        btn.disabled = false;
+      });
+    }
 
     load();
   }

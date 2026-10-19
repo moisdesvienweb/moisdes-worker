@@ -92,7 +92,11 @@
     settings: isFullAccess || !!permissions.settings?.read,
     analytics: true, // aggregate stats only — not section-scoped
     emails: isFullAccess || !!permissions.emails?.read,
-    users: isFullAccess, // account management is never delegable
+    // Visible to every logged-in user (the list itself is public within
+    // the admin, and everyone needs a way to reach "change my password")
+    // — actions that actually manage other accounts are gated inside
+    // admin-users.js and by the backend, not by hiding this panel.
+    users: true,
   };
   let firstVisiblePanel = null;
   document.querySelectorAll('.sidebar-link[data-panel]').forEach((btn) => {

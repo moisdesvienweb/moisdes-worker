@@ -96,19 +96,15 @@
 
   async function loadMosaic() {
     try {
-      const [postsR, postersR, eventsR, videosR, pdfsR] = await Promise.all([
-        api.get('/api/posts').catch(() => ({ posts: [] })),
-        api.get('/api/posters').catch(() => ({ posters: [] })),
-        api.get('/api/events').catch(() => ({ events: [] })),
-        api.get('/api/videos').catch(() => ({ videos: [] })),
-        api.get('/api/pdfs').catch(() => ({ pdfs: [] })),
-      ]);
+      // One combined request instead of five separate ones — same data,
+      // one round trip (and edge-cached on the Worker side too).
+      const feed = await api.get('/api/home-feed');
       const byType = {
-        post: [...postsR.posts].sort((a, b) => util.dateDesc(a.date, b.date)),
-        poster: [...postersR.posters].sort((a, b) => util.dateDesc(a.date, b.date)),
-        event: [...eventsR.events].sort((a, b) => util.dateDesc(a.date, b.date)),
-        video: [...videosR.videos].sort((a, b) => util.dateDesc(a.date, b.date)),
-        pdf: [...pdfsR.pdfs].sort((a, b) => util.dateDesc(a.date, b.date)),
+        post: [...(feed.posts || [])].sort((a, b) => util.dateDesc(a.date, b.date)),
+        poster: [...(feed.posters || [])].sort((a, b) => util.dateDesc(a.date, b.date)),
+        event: [...(feed.events || [])].sort((a, b) => util.dateDesc(a.date, b.date)),
+        video: [...(feed.videos || [])].sort((a, b) => util.dateDesc(a.date, b.date)),
+        pdf: [...(feed.pdfs || [])].sort((a, b) => util.dateDesc(a.date, b.date)),
       };
       const allFlat = Object.entries(byType).flatMap(([type, arr]) => arr.map((data) => ({ type, data })));
       allFlat.sort((a, b) => util.dateDesc(a.data.date, b.data.date));
