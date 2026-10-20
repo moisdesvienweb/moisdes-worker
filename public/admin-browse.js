@@ -24,6 +24,17 @@ window.MOISDES.adminBrowse = (function () {
   let table, thead, tbody, filterInput;
   let modalOverlay, modalTitle, modalBody, modalClose;
 
+  // Public-site URL for a row, matching home.js's TYPE_META hrefs.
+  // Simchas have no page of their own (ticker-only, no per-item link) —
+  // deliberately left out, so no Live view button renders for that type.
+  const PUBLIC_URL = {
+    posts: (row) => `/blog/post.html?id=${row.id}`,
+    posters: (row) => `/posters#poster-${row.id}`,
+    events: (row) => `/events/post.html?id=${row.id}`,
+    videos: (row) => `/video/post.html?id=${row.id}`,
+    pdfs: (row) => `/pdfs#pdf-${row.id}`,
+  };
+
   function fmtDate(iso) {
     if (!iso) return '';
     try { return hebrew.isoToHebrewString(iso); } catch (e) { return iso; }
@@ -56,6 +67,17 @@ window.MOISDES.adminBrowse = (function () {
         tr.innerHTML = cols.map(([key]) => `<td class="wrap">${key === 'date' ? fmtDate(row[key]) : escapeHtml(row[key] || '')}</td>`).join('') +
           `<td class="wrap">${escapeHtml(row.uploaded_by_name || '—')}</td>`;
         const actionsTd = document.createElement('td');
+        const publicUrlFn = PUBLIC_URL[currentType];
+        if (publicUrlFn) {
+          const liveBtn = document.createElement('a');
+          liveBtn.className = 'btn btn-sm';
+          liveBtn.textContent = 'Live view';
+          liveBtn.href = publicUrlFn(row);
+          liveBtn.target = '_blank';
+          liveBtn.rel = 'noopener';
+          liveBtn.style.marginInlineEnd = '.4rem';
+          actionsTd.appendChild(liveBtn);
+        }
         if (writable) {
           const editBtn = document.createElement('button');
           editBtn.type = 'button';
@@ -75,7 +97,7 @@ window.MOISDES.adminBrowse = (function () {
           actionsTd.appendChild(editBtn);
           actionsTd.appendChild(dupBtn);
           actionsTd.appendChild(delBtn);
-        } else {
+        } else if (!publicUrlFn) {
           actionsTd.className = 'state-msg';
           actionsTd.textContent = 'View only';
         }
