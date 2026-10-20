@@ -203,7 +203,8 @@ window.MOISDES.adminFields = (function () {
     const row = el('div', 'tag-input-row');
     const input = el('input');
     input.type = 'text';
-    input.placeholder = 'Add a new tag and press Enter';
+    input.placeholder = 'Add a new tag';
+    input.enterKeyHint = 'done';
 
     // Renames a tag everywhere — the shared tag list and every post/
     // event/video already published with it — not just in this one
@@ -246,9 +247,17 @@ window.MOISDES.adminFields = (function () {
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); addNew(input.value); input.value = ''; }
     });
+    // Mobile virtual keyboards routinely don't fire a JS-visible Enter
+    // keydown at all for their "Next"/"Go" key — it just moves focus to
+    // the next field in the form instead, with nothing for the above
+    // listener to catch. An explicit button works everywhere regardless
+    // of what the keyboard's own key does.
+    const addBtn = el('button', 'btn btn-sm', 'Add');
+    addBtn.addEventListener('click', () => { addNew(input.value); input.value = ''; });
 
     container.appendChild(pillsEl);
     row.appendChild(input);
+    row.appendChild(addBtn);
     container.appendChild(row);
     render();
 
@@ -586,7 +595,8 @@ window.MOISDES.adminFields = (function () {
     const row = el('div', 'tag-input-row');
     const input = el('input');
     input.type = 'text';
-    input.placeholder = placeholder || 'Add new and press Enter';
+    input.placeholder = placeholder || 'Add new';
+    input.enterKeyHint = 'done';
 
     function render() {
       pillsEl.innerHTML = '';
@@ -608,9 +618,15 @@ window.MOISDES.adminFields = (function () {
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); addNew(input.value); input.value = ''; }
     });
+    // See createTagInput's matching comment — mobile keyboards often
+    // don't fire a visible Enter keydown at all for their "Next"/"Go"
+    // key, so an explicit button is the only reliable way to add here.
+    const addBtn = el('button', 'btn btn-sm', 'Add');
+    addBtn.addEventListener('click', () => { addNew(input.value); input.value = ''; });
 
     container.appendChild(pillsEl);
     row.appendChild(input);
+    row.appendChild(addBtn);
     container.appendChild(row);
     render();
 
