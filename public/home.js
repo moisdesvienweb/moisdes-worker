@@ -24,7 +24,7 @@
   // ── MAGAZINE-STYLE MOSAIC: all content types merged into one grid,
   // newest first, with a few tiles sized bigger for visual variety.
   const TYPE_META = {
-    post: { label: 'בלאג', href: (data) => `/blog/post.html?id=${data.id}` },
+    post: { label: 'מהנעשה והנשמע', href: (data) => `/blog/post.html?id=${data.id}` },
     poster: { label: 'מודעה', href: (data) => `${window.MOISDES.CFG.pages.posters}#poster-${data.id}` },
     event: { label: 'מעמד', href: (data) => `/events/post.html?id=${data.id}` },
     video: { label: 'ווידיאו', href: (data) => `/video/post.html?id=${data.id}` },
@@ -64,6 +64,61 @@
       </div>
     `;
     return tile;
+  }
+
+  // The home mosaic's big slot, as a 3D crossfade carousel over every
+  // post marked "featured" in the admin — main image + title + a short
+  // excerpt per slide, auto-advancing every 3 seconds. Falls back to a
+  // single static tile (renderMosaicTile) when nothing's featured.
+  async function renderFeaturedSpotlight(posts) {
+    const box = document.createElement('div');
+    box.className = 'mosaic-item mosaic-big mosaic-featured';
+    const stage = document.createElement('div');
+    stage.className = 'featured-slideshow';
+    box.appendChild(stage);
+
+    const slides = [];
+    for (const data of posts) {
+      const img = await imageFor('post', data);
+      const slide = document.createElement('a');
+      slide.className = 'featured-slide';
+      slide.href = TYPE_META.post.href(data);
+      slide.innerHTML = `
+        ${img ? `<div class="mosaic-media" style="background-image:url('${util.eh(img)}')"></div>` : ''}
+        <div class="mosaic-overlay">
+          <span class="mosaic-badge">${TYPE_META.post.label}</span>
+          <div class="mosaic-title">${util.eh(titleFor('post', data))}</div>
+          <div class="mosaic-excerpt">${util.eh(excerpt(data.body, 110))}</div>
+          <div class="mosaic-date">${hebrew.isoToHebrewString(data.date)}</div>
+        </div>
+      `;
+      stage.appendChild(slide);
+      slides.push(slide);
+    }
+    slides[0].classList.add('active');
+
+    if (slides.length > 1) {
+      const dots = document.createElement('div');
+      dots.className = 'featured-dots';
+      const dotEls = slides.map((_, i) => {
+        const dot = document.createElement('span');
+        dot.className = 'featured-dot' + (i === 0 ? ' active' : '');
+        dots.appendChild(dot);
+        return dot;
+      });
+      box.appendChild(dots);
+
+      let idx = 0;
+      setInterval(() => {
+        slides[idx].classList.remove('active');
+        dotEls[idx].classList.remove('active');
+        idx = (idx + 1) % slides.length;
+        slides[idx].classList.add('active');
+        dotEls[idx].classList.add('active');
+      }, 3000);
+    }
+
+    return box;
   }
 
   function renderMoreCard(type, data, img) {
@@ -121,11 +176,19 @@
       }
 
       if (!alreadyRendered) {
-        // Curate exactly 10 for the mosaic: newest blog post always
-        // included (and always the "big" tile), one of every other
-        // section guaranteed, rest filled by overall recency. (Mirrored
-        // server-side in index.js's renderHomeMosaicHtml when this page
-        // was pre-rendered — keep the two in sync.)
+        // The big slot is a rotating spotlight of every post marked
+        // "featured" in the admin, if there are any — otherwise it falls
+        // back to the single newest post, same as before.
+        const featuredPosts = byType.post.filter((p) => Number(p.featured)).slice(0, 8);
+        const hasSpotlight = featuredPosts.length > 0;
+
+        // Curate the rest: one of every other section guaranteed, rest
+        // filled by overall recency, up to 10 tiles total counting the
+        // spotlight slot. (index.js also has a renderHomeMosaicHtml that
+        // mirrors this for server-side pre-rendering, but that path is
+        // currently disabled — see wrangler.toml — so it's not in sync
+        // with this spotlight logic right now; update it too if SSR is
+        // ever turned back on.)
         const chosen = [];
         const chosenSet = new Set();
         function add(type, data) {
@@ -134,25 +197,31 @@
           chosenSet.add(k);
           chosen.push({ type, data });
         }
-        const featuredPost = byType.post[0];
-        if (featuredPost) add('post', featuredPost);
+        if (hasSpotlight) {
+          featuredPosts.forEach((p) => chosenSet.add(itemKey('post', p)));
+        } else if (byType.post[0]) {
+          add('post', byType.post[0]);
+        }
         ['poster', 'event', 'video', 'pdf'].forEach((t) => { if (byType[t][0]) add(t, byType[t][0]); });
+        const targetCount = hasSpotlight ? 9 : 10;
         for (const it of allFlat) {
-          if (chosen.length >= 10) break;
+          if (chosen.length >= targetCount) break;
           add(it.type, it.data);
         }
         chosen.sort((a, b) => util.dateDesc(a.data.date, b.data.date));
 
         mosaicEl.innerHTML = '';
-        // First tile (newest post) is always the big feature. Beyond
-        // that, a couple of tiles in each half of the grid get a
-        // wide/tall span for a proper magazine rhythm — otherwise every
-        // non-featured tile is a uniform 1x1, which looks flat next to
-        // the one big tile.
+        // The spotlight (or, without one, the newest post) is always the
+        // big feature in slot 0. Beyond that, a couple of tiles in each
+        // half of the grid get a wide/tall span for a proper magazine
+        // rhythm — otherwise every tile is a uniform 1x1, which looks
+        // flat next to the one big tile.
         const SIZE_BY_INDEX = { 0: 'mosaic-big', 2: 'mosaic-tall', 3: 'mosaic-wide', 7: 'mosaic-tall', 8: 'mosaic-wide' };
+        if (hasSpotlight) mosaicEl.appendChild(await renderFeaturedSpotlight(featuredPosts));
+        const indexOffset = hasSpotlight ? 1 : 0;
         for (let i = 0; i < chosen.length; i++) {
           const { type, data } = chosen[i];
-          const tile = await renderMosaicTile(type, data, SIZE_BY_INDEX[i] || '');
+          const tile = await renderMosaicTile(type, data, SIZE_BY_INDEX[i + indexOffset] || '');
           mosaicEl.appendChild(tile);
         }
       }
@@ -287,6 +356,49 @@
     }
   }
 
+  // ── TAGS (sidebar) — featured tags always first, rest collapsed behind
+  // "מער" until clicked. Each tag links to the search page's exact-match
+  // tag filter (already supported by search.js via ?tag=).
+  const TAGS_COLLAPSED_COUNT = 12;
+  async function loadTagsWidget() {
+    const widget = document.getElementById('tags-widget');
+    const listEl = document.getElementById('tags-widget-list');
+    const moreBtn = document.getElementById('tags-widget-more');
+    if (!widget || !listEl) return;
+    try {
+      const { tags, featured } = await api.get('/api/tags');
+      if (!tags || !tags.length) return; // stays hidden — nothing to show yet
+      const featuredSet = new Set(featured || []);
+      const rest = tags.filter((t) => !featuredSet.has(t)).sort((a, b) => a.localeCompare(b));
+      const ordered = [...(featured || []).slice().sort((a, b) => a.localeCompare(b)), ...rest];
+
+      function tagEl(name) {
+        const a = document.createElement('a');
+        a.className = 'tags-widget-tag' + (featuredSet.has(name) ? ' is-featured' : '');
+        a.href = `/search/?tag=${encodeURIComponent(name)}`;
+        a.textContent = name;
+        return a;
+      }
+
+      listEl.innerHTML = '';
+      const collapsedCount = Math.max(featuredSet.size, TAGS_COLLAPSED_COUNT);
+      ordered.slice(0, collapsedCount).forEach((name) => listEl.appendChild(tagEl(name)));
+
+      const hidden = ordered.slice(collapsedCount);
+      if (hidden.length) {
+        moreBtn.style.display = '';
+        moreBtn.textContent = `מער ← (${hidden.length})`;
+        moreBtn.addEventListener('click', () => {
+          hidden.forEach((name) => listEl.appendChild(tagEl(name)));
+          listEl.classList.add('is-expanded');
+          moreBtn.style.display = 'none';
+        });
+      }
+
+      widget.style.display = '';
+    } catch (e) { /* sidebar widget — fails quietly, nothing critical lost */ }
+  }
+
   // Only the main "נייעס" content gates the loading overlay — zmanim,
   // daf, and upcoming are sidebar/strip widgets that each already have
   // their own "Loading…" placeholder in the HTML, so there's no reason
@@ -300,6 +412,7 @@
   loadZmanim();
   loadDaf();
   loadUpcoming();
+  loadTagsWidget();
   await loadMosaic();
   if (window.MOISDES.hideLoadingOverlay) window.MOISDES.hideLoadingOverlay();
 

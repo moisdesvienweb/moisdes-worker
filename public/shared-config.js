@@ -42,7 +42,7 @@ window.MOISDES.CFG = {
     { href: '/video', label: 'ווידיאוס' },
     { href: '/events', label: 'מעמדים' },
     { href: '/posters', label: 'מודעות' },
-    { href: '/blog', label: 'בלאג' },
+    { href: '/blog', label: 'מהנעשה והנשמע' },
   ],
 
   // Bereishit Shabbat of Hebrew year 5786, independently derived from the

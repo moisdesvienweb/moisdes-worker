@@ -28,6 +28,45 @@ window.MOISDES.adminSettings = (function () {
     try { return JSON.parse(s); } catch (e) { return fallback; }
   }
 
+  // Featured-tags list — stars a tag so it's pinned to the top of the
+  // home page's tag widget. Click any tag pill to toggle; works even for
+  // a tag nobody's used yet to feature it preemptively (the endpoint
+  // creates the tag row if it doesn't already exist).
+  function initFeaturedTags(writable) {
+    const listEl = document.getElementById('settings-tags-list');
+    if (!listEl) return;
+
+    function render(tags, featured) {
+      listEl.innerHTML = '';
+      const featuredSet = new Set(featured);
+      [...tags].sort((a, b) => a.localeCompare(b)).forEach((name) => {
+        const isFeatured = featuredSet.has(name);
+        const pill = el('button', 'pill pill-toggle' + (isFeatured ? ' active' : ''), (isFeatured ? '★ ' : '') + name);
+        if (!writable) pill.disabled = true;
+        pill.addEventListener('click', async () => {
+          if (!writable) return;
+          pill.disabled = true;
+          try {
+            await api.put('/api/tags/featured', { name, featured: !isFeatured });
+            load();
+          } catch (e) {
+            alert(e.message || 'Could not update.');
+            pill.disabled = false;
+          }
+        });
+        listEl.appendChild(pill);
+      });
+      if (!tags.length) listEl.innerHTML = '<p class="state-msg">No tags yet — tags appear here once used on a post, event, or video.</p>';
+    }
+
+    function load() {
+      api.get('/api/tags').then(({ tags, featured }) => render(tags || [], featured || [])).catch(() => {
+        listEl.innerHTML = '<p class="state-msg">Could not load tags.</p>';
+      });
+    }
+    load();
+  }
+
   function init() {
     const form = document.getElementById('settings-form');
     const urlInput = document.getElementById('settings-newsletter-url');
@@ -35,6 +74,7 @@ window.MOISDES.adminSettings = (function () {
     const listEl = document.getElementById('footer-buttons-list');
     const addBtn = document.getElementById('footer-buttons-add');
     const msg = document.getElementById('settings-msg');
+    initFeaturedTags(canWrite());
     if (!form) return;
 
     const writable = canWrite();

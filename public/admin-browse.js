@@ -79,6 +79,15 @@ window.MOISDES.adminBrowse = (function () {
           actionsTd.appendChild(liveBtn);
         }
         if (writable) {
+          if (currentType === 'posts') {
+            const featBtn = document.createElement('button');
+            featBtn.type = 'button';
+            featBtn.className = 'btn btn-sm' + (Number(row.featured) ? ' btn-primary' : '');
+            featBtn.textContent = Number(row.featured) ? '★ Featured' : '☆ Feature';
+            featBtn.style.marginInlineEnd = '.4rem';
+            featBtn.addEventListener('click', () => toggleFeatured(row, featBtn));
+            actionsTd.appendChild(featBtn);
+          }
           const editBtn = document.createElement('button');
           editBtn.type = 'button';
           editBtn.className = 'btn btn-sm';
@@ -145,6 +154,19 @@ window.MOISDES.adminBrowse = (function () {
   function closeModal() {
     modalOverlay.classList.remove('open');
     modalBody.innerHTML = '';
+  }
+
+  async function toggleFeatured(row, btn) {
+    const next = Number(row.featured) ? 0 : 1;
+    btn.disabled = true;
+    try {
+      await api.put(`/api/posts/${row.id}`, { ...row, featured: next });
+      row.featured = next;
+      render();
+    } catch (e) {
+      alert(e.message || 'Could not update.');
+      btn.disabled = false;
+    }
   }
 
   async function remove(row) {

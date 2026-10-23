@@ -32,7 +32,7 @@
   }
 
   const SOURCES = [
-    { type: 'posts', label: 'בלאג', page: '/blog', fields: ['title', 'body', 'tags', 'category'], excerptField: 'body' },
+    { type: 'posts', label: 'מהנעשה והנשמע', page: '/blog', fields: ['title', 'body', 'tags', 'category'], excerptField: 'body' },
     { type: 'posters', label: 'מודעות', page: '/posters', fields: ['parsha'], excerptField: null },
     { type: 'events', label: 'מעמדים', page: '/events', fields: ['title', 'description', 'tags', 'category', 'location'], excerptField: 'description' },
     { type: 'videos', label: 'ווידיאוס', page: '/video', fields: ['title', 'description', 'tags', 'category', 'location'], excerptField: 'description' },

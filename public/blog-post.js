@@ -46,7 +46,7 @@
 
   const id = new URLSearchParams(location.search).get('id');
   if (!id) {
-    wrap.innerHTML = '<h1 class="page-title">דער בלאג נישט געפונען</h1>';
+    wrap.innerHTML = '<h1 class="page-title">דער מהנעשה והנשמע נישט געפונען</h1>';
     return;
   }
 
@@ -54,7 +54,7 @@
     const { posts } = await api.get('/api/posts');
     const post = posts.find((p) => String(p.id) === String(id));
     if (!post) {
-      wrap.innerHTML = '<h1 class="page-title">דער בלאג נישט געפונען</h1>';
+      wrap.innerHTML = '<h1 class="page-title">דער מהנעשה והנשמע נישט געפונען</h1>';
       return;
     }
     document.title = `${post.title} — חצר וויען`;

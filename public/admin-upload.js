@@ -221,7 +221,22 @@ window.MOISDES.adminUpload = (function () {
       form.appendChild(fieldGroup('Images', galleryWrap));
       gallery = AF.createGalleryUploader(galleryWrap, { accept: 'image/*', existingFolder: existing?.folder_url });
 
-      getExtra = () => ({ title: title.value, body: bodyField.editor.getHtml(), category: categoryInput.getValue(), tags: tagInput.getValue() });
+      // Featured posts take over the home page's big slot as a rotating
+      // slideshow instead of just the single newest post — any number can
+      // be marked, nothing special happens until at least one is.
+      const featuredRow = el('div', 'checkbox-row');
+      const featuredCheckbox = el('input');
+      featuredCheckbox.type = 'checkbox';
+      featuredCheckbox.id = 'post-featured';
+      featuredCheckbox.checked = !!(prefillSrc && Number(prefillSrc.featured));
+      const featuredLabel = el('label', '', 'Featured (shows in the home page\'s rotating spotlight)');
+      featuredLabel.htmlFor = featuredCheckbox.id;
+      featuredLabel.style.margin = '0';
+      featuredRow.appendChild(featuredCheckbox);
+      featuredRow.appendChild(featuredLabel);
+      form.appendChild(fieldGroup('', featuredRow));
+
+      getExtra = () => ({ title: title.value, body: bodyField.editor.getHtml(), category: categoryInput.getValue(), tags: tagInput.getValue(), featured: featuredCheckbox.checked ? 1 : 0 });
 
     } else if (type === 'posters') {
       const parshaWrap = el('div');

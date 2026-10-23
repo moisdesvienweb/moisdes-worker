@@ -239,7 +239,7 @@ const CONTENT_SCHEMAS = {
 };
 
 const CONTENT_MIGRATIONS = {
-  posts: ['tags TEXT', 'category TEXT', 'folder_url TEXT', 'deleted_at TEXT'],
+  posts: ['tags TEXT', 'category TEXT', 'folder_url TEXT', 'deleted_at TEXT', 'featured INTEGER DEFAULT 0'],
   posters: ['folder_url TEXT', 'deleted_at TEXT'],
   events: ['tags TEXT', 'folder_url TEXT', 'thumb_url TEXT', 'deleted_at TEXT'],
   videos: ['tags TEXT', 'video_url TEXT', 'folder_url TEXT', 'video_file_url TEXT', 'deleted_at TEXT'],
@@ -248,7 +248,7 @@ const CONTENT_MIGRATIONS = {
 };
 
 const CONTENT_FIELDS = {
-  posts: ['date', 'title', 'body', 'folder_url', 'tags', 'category'],
+  posts: ['date', 'title', 'body', 'folder_url', 'tags', 'category', 'featured'],
   posters: ['date', 'parsha', 'folder_url'],
   events: ['date', 'title', 'location', 'category', 'description', 'tags', 'folder_url', 'thumb_url'],
   videos: ['date', 'title', 'location', 'category', 'description', 'tags', 'video_url', 'folder_url', 'video_file_url'],
@@ -319,6 +319,7 @@ async function ensureCoreTables(env) {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE
   )`).run();
+  try { await env.DB.prepare('ALTER TABLE tags ADD COLUMN featured INTEGER DEFAULT 0').run(); } catch (e) { /* already exists */ }
 
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1165,8 +1166,25 @@ async function handleDeleteContent({ match, env, user }) {
 }
 
 async function handleTags({ env }) {
-  const { results } = await env.DB.prepare('SELECT name FROM tags ORDER BY name').all();
-  return json({ tags: results.map((r) => r.name) });
+  const { results } = await env.DB.prepare('SELECT name, featured FROM tags ORDER BY name').all();
+  return json({
+    tags: results.map((r) => r.name),
+    featured: results.filter((r) => r.featured).map((r) => r.name),
+  });
+}
+
+async function handleSetTagFeatured({ request, env, user }) {
+  requireUser(user);
+  const perms = await getEffectivePermissions(env, user);
+  if (!perms.posts?.write && !perms.events?.write && !perms.videos?.write) {
+    throw new HttpError("You don't have write access to tags", 403);
+  }
+  const body = await request.json().catch(() => ({}));
+  const name = String(body.name || '').trim();
+  if (!name) throw new HttpError('Tag name is required', 400);
+  await env.DB.prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)').bind(name).run();
+  await env.DB.prepare('UPDATE tags SET featured = ? WHERE name = ?').bind(body.featured ? 1 : 0, name).run();
+  return json({ ok: true });
 }
 
 // Renames a tag everywhere at once: the shared `tags` registry (so it
@@ -2171,6 +2189,7 @@ const routes = [
   ['PUT', /^\/api\/me\/password$/, handleChangeOwnPassword],
   ['GET', /^\/api\/tags$/, handleTags],
   ['PUT', /^\/api\/tags\/rename$/, handleRenameTag],
+  ['PUT', /^\/api\/tags\/featured$/, handleSetTagFeatured],
   ['GET', /^\/api\/categories$/, handleCategories],
   ['GET', /^\/api\/parshiyot-custom$/, handleCustomParshiyot],
   ['GET', /^\/api\/r2-list$/, handleR2List],
