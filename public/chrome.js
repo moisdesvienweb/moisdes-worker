@@ -79,17 +79,21 @@
       return a;
     }
 
-    listEl.innerHTML = '';
-    ordered.slice(0, featuredSet.size).forEach((name) => listEl.appendChild(tagEl(name)));
-
     const hidden = ordered.slice(featuredSet.size);
+    let expanded = false;
+    function render() {
+      listEl.innerHTML = '';
+      (expanded ? ordered : ordered.slice(0, featuredSet.size)).forEach((name) => listEl.appendChild(tagEl(name)));
+      if (hidden.length) moreBtn.textContent = expanded ? 'ווייניגער ←' : `מער ← (${hidden.length})`;
+    }
+    render();
+
     if (hidden.length) {
       moreBtn.style.display = '';
-      moreBtn.textContent = `מער ← (${hidden.length})`;
       moreBtn.addEventListener('click', () => {
-        hidden.forEach((name) => listEl.appendChild(tagEl(name)));
-        bar.classList.add('is-expanded');
-        moreBtn.style.display = 'none';
+        expanded = !expanded;
+        bar.classList.toggle('is-expanded', expanded);
+        render();
       });
     }
 
