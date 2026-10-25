@@ -748,29 +748,33 @@ audio { width: 100%; max-width: 400px; margin-top: .5rem; }
 .widget-loc { font-size: .68rem; color: var(--ink-faint); margin-top: .3rem; direction: ltr; unicode-bidi: isolate; text-align: right; }
 .zman-machmir { font-size: .62rem; color: var(--ink-faint); margin-top: .25rem; }
 
-/* ── TAGS WIDGET (home sidebar) ──────────────────────────────────── */
+/* ── TAGS BAR (site-wide, directly under the header) ─────────────── */
 
-.tags-widget-list { display: flex; flex-wrap: wrap; gap: .4rem; }
-.tags-widget-tag {
+.tags-bar {
+  background: var(--footer-bg);
+  border-bottom: 1px solid var(--line);
+  padding: .5rem 1rem;
+  display: flex; align-items: center; flex-wrap: wrap; gap: .4rem .5rem;
+}
+.tags-bar-list { display: flex; flex-wrap: wrap; gap: .4rem; }
+.tags-bar-tag {
   display: inline-block; font-size: .78rem; padding: .25rem .65rem; border-radius: 14px;
   background: var(--card-bg-hover); border: 1px solid var(--line);
   color: var(--ink-soft); text-decoration: none; white-space: nowrap;
   transition: background .15s, color .15s, border-color .15s;
 }
-.tags-widget-tag:hover { border-color: var(--accent); color: var(--accent); }
-.tags-widget-tag.is-featured {
-  background: var(--accent); border-color: var(--accent); color: #2c1608; font-weight: 700;
+.tags-bar-tag:hover { border-color: var(--accent); color: var(--accent); }
+.tags-bar-tag.is-featured { background: var(--accent); border-color: var(--accent); color: #2c1608; font-weight: 700; }
+.tags-bar-more {
+  background: none; border: none; cursor: pointer;
+  color: var(--accent); font-size: .8rem; font-weight: 700; font-family: inherit; padding: .25rem 0;
+  white-space: nowrap;
 }
-.tags-widget-more {
-  display: block; margin-top: .6rem; background: none; border: none; cursor: pointer;
-  color: var(--accent); font-size: .8rem; font-weight: 700; font-family: inherit; padding: 0;
-}
-.tags-widget-more:hover { text-decoration: underline; }
-/* Sidebar collapses above the main content on mobile — a long "more"
-   tag list there shouldn't push the whole page down, so it scrolls
-   within itself instead once expanded past a comfortable height. */
-@media (max-width: 900px) {
-  .tags-widget-list.is-expanded { max-height: 220px; overflow-y: auto; padding-inline-end: .3rem; }
+.tags-bar-more:hover { text-decoration: underline; }
+/* Wraps to as many rows as needed rather than scrolling horizontally —
+   simpler and more reliable on a phone than a swipe-to-scroll strip. */
+@media (max-width: 560px) {
+  .tags-bar { padding: .45rem .75rem; }
 }
 .zman-machmir span { color: var(--ink-soft); direction: ltr; unicode-bidi: isolate; }
 .zman-attribution { font-size: .6rem; color: var(--ink-faint); margin-top: .15rem; direction: ltr; text-align: right; }

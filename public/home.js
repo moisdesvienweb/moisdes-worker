@@ -356,46 +356,8 @@
     }
   }
 
-  // ── TAGS (sidebar) — only featured tags show up front; everything else
-  // stays behind "מער" until clicked. Each tag links to the search page's
-  // exact-match tag filter (already supported by search.js via ?tag=).
-  async function loadTagsWidget() {
-    const widget = document.getElementById('tags-widget');
-    const listEl = document.getElementById('tags-widget-list');
-    const moreBtn = document.getElementById('tags-widget-more');
-    if (!widget || !listEl) return;
-    try {
-      const { tags, featured } = await api.get('/api/tags');
-      if (!tags || !tags.length) return; // stays hidden — nothing to show yet
-      const featuredSet = new Set(featured || []);
-      const rest = tags.filter((t) => !featuredSet.has(t)).sort((a, b) => a.localeCompare(b));
-      const ordered = [...(featured || []).slice().sort((a, b) => a.localeCompare(b)), ...rest];
-
-      function tagEl(name) {
-        const a = document.createElement('a');
-        a.className = 'tags-widget-tag' + (featuredSet.has(name) ? ' is-featured' : '');
-        a.href = `/search/?tag=${encodeURIComponent(name)}`;
-        a.textContent = name;
-        return a;
-      }
-
-      listEl.innerHTML = '';
-      ordered.slice(0, featuredSet.size).forEach((name) => listEl.appendChild(tagEl(name)));
-
-      const hidden = ordered.slice(featuredSet.size);
-      if (hidden.length) {
-        moreBtn.style.display = '';
-        moreBtn.textContent = `מער ← (${hidden.length})`;
-        moreBtn.addEventListener('click', () => {
-          hidden.forEach((name) => listEl.appendChild(tagEl(name)));
-          listEl.classList.add('is-expanded');
-          moreBtn.style.display = 'none';
-        });
-      }
-
-      widget.style.display = '';
-    } catch (e) { /* sidebar widget — fails quietly, nothing critical lost */ }
-  }
+  // Tags now live site-wide in the header's tags-bar (see chrome.js),
+  // not as a home-page-only sidebar widget.
 
   // Only the main "נייעס" content gates the loading overlay — zmanim,
   // daf, and upcoming are sidebar/strip widgets that each already have
@@ -410,7 +372,6 @@
   loadZmanim();
   loadDaf();
   loadUpcoming();
-  loadTagsWidget();
   await loadMosaic();
   if (window.MOISDES.hideLoadingOverlay) window.MOISDES.hideLoadingOverlay();
 

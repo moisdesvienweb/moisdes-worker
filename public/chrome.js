@@ -56,6 +56,47 @@
   } catch (e) { /* ticker just stays hidden */ }
 })();
 
+// ── TAGS BAR (shared across every page, right under the header) — only
+// featured tags show up front; everything else stays behind "מער" until
+// clicked. Each tag links to the search page's exact-match tag filter.
+(async function () {
+  const bar = document.getElementById('tags-bar');
+  const listEl = document.getElementById('tags-bar-list');
+  const moreBtn = document.getElementById('tags-bar-more');
+  if (!bar || !listEl || !window.MOISDES || !window.MOISDES.api) return;
+  try {
+    const { tags, featured } = await window.MOISDES.api.get('/api/tags');
+    if (!tags || !tags.length) return; // stays hidden — nothing to show yet
+    const featuredSet = new Set(featured || []);
+    const rest = tags.filter((t) => !featuredSet.has(t)).sort((a, b) => a.localeCompare(b));
+    const ordered = [...(featured || []).slice().sort((a, b) => a.localeCompare(b)), ...rest];
+
+    function tagEl(name) {
+      const a = document.createElement('a');
+      a.className = 'tags-bar-tag' + (featuredSet.has(name) ? ' is-featured' : '');
+      a.href = `/search/?tag=${encodeURIComponent(name)}`;
+      a.textContent = name;
+      return a;
+    }
+
+    listEl.innerHTML = '';
+    ordered.slice(0, featuredSet.size).forEach((name) => listEl.appendChild(tagEl(name)));
+
+    const hidden = ordered.slice(featuredSet.size);
+    if (hidden.length) {
+      moreBtn.style.display = '';
+      moreBtn.textContent = `מער ← (${hidden.length})`;
+      moreBtn.addEventListener('click', () => {
+        hidden.forEach((name) => listEl.appendChild(tagEl(name)));
+        bar.classList.add('is-expanded');
+        moreBtn.style.display = 'none';
+      });
+    }
+
+    bar.style.display = '';
+  } catch (e) { /* tags bar — fails quietly, nothing critical lost */ }
+})();
+
 // ── NEWSLETTER + CONTACT + CUSTOM FOOTER BUTTONS (shared across every
 // page) — newsletter shows once a URL is set via Admin → Settings;
 // contact shows once a form with the configured slug exists (Admin →
