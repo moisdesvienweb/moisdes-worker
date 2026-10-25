@@ -662,13 +662,30 @@ audio { width: 100%; max-width: 400px; margin-top: .5rem; }
    contained within the tile's own rounded/clipped box (inherited from
    .mosaic-item) so it reads as one solid "card" turning in place. */
 
-.mosaic-featured { padding: 0; }
+/* The box itself sits with a faint permanent tilt in 3D space (not just
+   its slide transitions) so it reads as a tilted card even at rest —
+   deepened with an offset shadow instead of the flat one every other
+   mosaic tile gets. */
+.mosaic-featured {
+  padding: 0;
+  transform: perspective(1200px) rotateY(-4deg) rotateX(1.5deg);
+  transform-style: preserve-3d;
+  box-shadow: 14px 18px 34px rgba(0, 0, 0, .4), 2px 4px 10px rgba(0, 0, 0, .25);
+  transition: transform .4s ease;
+}
+.mosaic-featured:hover { transform: perspective(1200px) rotateY(-1.5deg) rotateX(.5deg); }
+@media (max-width: 860px) {
+  /* The tilt reads fine on a big desktop tile but just looks crooked at
+     phone/tablet width — stays flat there instead. */
+  .mosaic-featured { transform: none; box-shadow: 0 4px 16px rgba(0, 0, 0, .25); }
+  .mosaic-featured:hover { transform: none; }
+}
 .featured-slideshow { position: relative; width: 100%; height: 100%; perspective: 1400px; }
 .featured-slide {
   position: absolute; inset: 0; display: block;
   opacity: 0; transform: rotateY(28deg) scale(.94);
   transform-origin: center center;
-  transition: opacity .8s ease, transform .8s ease;
+  transition: opacity 1.6s ease, transform 1.6s ease;
   backface-visibility: hidden;
   pointer-events: none;
 }

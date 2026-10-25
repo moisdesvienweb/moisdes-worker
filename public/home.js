@@ -68,7 +68,7 @@
 
   // The home mosaic's big slot, as a 3D crossfade carousel over every
   // post marked "featured" in the admin — main image + title + a short
-  // excerpt per slide, auto-advancing every 3 seconds. Falls back to a
+  // excerpt per slide, auto-advancing every 6 seconds. Falls back to a
   // single static tile (renderMosaicTile) when nothing's featured.
   async function renderFeaturedSpotlight(posts) {
     const box = document.createElement('div');
@@ -115,7 +115,7 @@
         idx = (idx + 1) % slides.length;
         slides[idx].classList.add('active');
         dotEls[idx].classList.add('active');
-      }, 3000);
+      }, 6000);
     }
 
     return box;
