@@ -356,10 +356,9 @@
     }
   }
 
-  // ── TAGS (sidebar) — featured tags always first, rest collapsed behind
-  // "מער" until clicked. Each tag links to the search page's exact-match
-  // tag filter (already supported by search.js via ?tag=).
-  const TAGS_COLLAPSED_COUNT = 12;
+  // ── TAGS (sidebar) — only featured tags show up front; everything else
+  // stays behind "מער" until clicked. Each tag links to the search page's
+  // exact-match tag filter (already supported by search.js via ?tag=).
   async function loadTagsWidget() {
     const widget = document.getElementById('tags-widget');
     const listEl = document.getElementById('tags-widget-list');
@@ -381,10 +380,9 @@
       }
 
       listEl.innerHTML = '';
-      const collapsedCount = Math.max(featuredSet.size, TAGS_COLLAPSED_COUNT);
-      ordered.slice(0, collapsedCount).forEach((name) => listEl.appendChild(tagEl(name)));
+      ordered.slice(0, featuredSet.size).forEach((name) => listEl.appendChild(tagEl(name)));
 
-      const hidden = ordered.slice(collapsedCount);
+      const hidden = ordered.slice(featuredSet.size);
       if (hidden.length) {
         moreBtn.style.display = '';
         moreBtn.textContent = `מער ← (${hidden.length})`;

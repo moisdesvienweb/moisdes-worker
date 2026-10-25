@@ -41,7 +41,7 @@ window.MOISDES.adminSettings = (function () {
       const featuredSet = new Set(featured);
       [...tags].sort((a, b) => a.localeCompare(b)).forEach((name) => {
         const isFeatured = featuredSet.has(name);
-        const pill = el('button', 'pill pill-toggle' + (isFeatured ? ' active' : ''), (isFeatured ? '★ ' : '') + name);
+        const pill = el('button', 'pill pill-toggle' + (isFeatured ? ' active' : ''), name);
         if (!writable) pill.disabled = true;
         pill.addEventListener('click', async () => {
           if (!writable) return;
