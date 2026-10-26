@@ -79,7 +79,14 @@
     if (ok && !firstUploadType) firstUploadType = btn.dataset.type;
   });
   document.querySelectorAll('#browse-subtabs .subtab').forEach((btn) => {
-    const ok = isFullAccess || !!permissions[btn.dataset.type]?.read;
+    // "Featured" spans every type at once rather than gating on one
+    // section's permission — visible as soon as the admin can read ANY
+    // section (matches that the underlying per-type list endpoints
+    // already return rows regardless of read permission; that only gates
+    // the uploaded-by attribution, not the list itself).
+    const ok = btn.dataset.type === 'featured'
+      ? isFullAccess || Object.values(permissions).some((p) => p?.read)
+      : isFullAccess || !!permissions[btn.dataset.type]?.read;
     btn.style.display = ok ? '' : 'none';
     if (ok && !firstBrowseType) firstBrowseType = btn.dataset.type;
   });

@@ -152,6 +152,59 @@ window.MOISDES.adminUpload = (function () {
     return { row, getValue: () => input.value.trim() };
   }
 
+  // Stored publish_at is "YYYY-MM-DD HH:MM:SS" UTC (same format SQLite's
+  // own datetime('now') produces, so string comparison in the Worker's
+  // WHERE clause sorts correctly) — same "no 'T' means append Z" pattern
+  // used elsewhere in this codebase for that column shape (see
+  // shared-config.js's isRecent()).
+  function publishAtToLocalInputValue(stored) {
+    if (!stored) return '';
+    const d = new Date(stored.includes('T') ? stored : stored.replace(' ', 'T') + 'Z');
+    if (isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  // datetime-local's value has no timezone suffix, so `new Date(value)`
+  // is parsed as the browser's own local time — exactly "your local time
+  // zone" with zero extra handling needed, then converted to the UTC
+  // storage format above.
+  function localInputValueToPublishAt(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return '';
+    return d.toISOString().slice(0, 19).replace('T', ' ');
+  }
+
+  let featuredScheduleUid = 0;
+  // Appends a "Featured" checkbox + "schedule for later" field to `form`
+  // — used by every content type except simchas (ticker-only, no page of
+  // its own) and the Calendar tab (writes straight to Google Calendar,
+  // not a local row). Returns getters to fold into that type's getExtra().
+  function addFeaturedAndScheduleFields(form, prefillSrc) {
+    const uid = ++featuredScheduleUid;
+    const featuredRow = el('div', 'checkbox-row');
+    const featuredCheckbox = el('input');
+    featuredCheckbox.type = 'checkbox';
+    featuredCheckbox.id = `featured-${uid}`;
+    featuredCheckbox.checked = !!(prefillSrc && Number(prefillSrc.featured));
+    const featuredLabel = el('label', '', 'Featured (shows in the home page\'s rotating spotlight)');
+    featuredLabel.htmlFor = featuredCheckbox.id;
+    featuredLabel.style.margin = '0';
+    featuredRow.appendChild(featuredCheckbox);
+    featuredRow.appendChild(featuredLabel);
+    form.appendChild(fieldGroup('', featuredRow));
+
+    const scheduleInput = el('input');
+    scheduleInput.type = 'datetime-local';
+    scheduleInput.value = publishAtToLocalInputValue(prefillSrc?.publish_at);
+    form.appendChild(fieldGroup("Schedule for later (optional — leave blank to publish immediately; your device's local time)", scheduleInput));
+
+    return {
+      getFeatured: () => (featuredCheckbox.checked ? 1 : 0),
+      getPublishAt: () => localInputValueToPublishAt(scheduleInput.value),
+    };
+  }
+
   // ── FORM BUILDER — shared by "Upload" (create) and "Browse & Edit" (edit) ──
   //
   // opts: { existing, onSaved }
@@ -222,21 +275,12 @@ window.MOISDES.adminUpload = (function () {
       gallery = AF.createGalleryUploader(galleryWrap, { accept: 'image/*', existingFolder: existing?.folder_url });
 
       // Featured posts take over the home page's big slot as a rotating
-      // slideshow instead of just the single newest post — any number can
-      // be marked, nothing special happens until at least one is.
-      const featuredRow = el('div', 'checkbox-row');
-      const featuredCheckbox = el('input');
-      featuredCheckbox.type = 'checkbox';
-      featuredCheckbox.id = 'post-featured';
-      featuredCheckbox.checked = !!(prefillSrc && Number(prefillSrc.featured));
-      const featuredLabel = el('label', '', 'Featured (shows in the home page\'s rotating spotlight)');
-      featuredLabel.htmlFor = featuredCheckbox.id;
-      featuredLabel.style.margin = '0';
-      featuredRow.appendChild(featuredCheckbox);
-      featuredRow.appendChild(featuredLabel);
-      form.appendChild(fieldGroup('', featuredRow));
+      // slideshow instead of just the single newest post — any number,
+      // across any section, can be marked; nothing special happens until
+      // at least one is.
+      const postsFs = addFeaturedAndScheduleFields(form, prefillSrc);
 
-      getExtra = () => ({ title: title.value, body: bodyField.editor.getHtml(), category: categoryInput.getValue(), tags: tagInput.getValue(), featured: featuredCheckbox.checked ? 1 : 0 });
+      getExtra = () => ({ title: title.value, body: bodyField.editor.getHtml(), category: categoryInput.getValue(), tags: tagInput.getValue(), featured: postsFs.getFeatured(), publish_at: postsFs.getPublishAt() });
 
     } else if (type === 'posters') {
       const parshaWrap = el('div');
@@ -247,7 +291,9 @@ window.MOISDES.adminUpload = (function () {
       form.appendChild(fieldGroup('Images', galleryWrap));
       gallery = AF.createGalleryUploader(galleryWrap, { accept: 'image/*', existingFolder: existing?.folder_url });
 
-      getExtra = () => ({ parsha: parshaPicker.getValue() });
+      const postersFs = addFeaturedAndScheduleFields(form, prefillSrc);
+
+      getExtra = () => ({ parsha: parshaPicker.getValue(), featured: postersFs.getFeatured(), publish_at: postersFs.getPublishAt() });
 
     } else if (type === 'events') {
       const title = textInput('Title', prefillSrc?.title);
@@ -306,7 +352,9 @@ window.MOISDES.adminUpload = (function () {
       form.appendChild(fieldGroup('Photos & audio', galleryWrap));
       gallery = AF.createGalleryUploader(galleryWrap, { existingFolder: existing?.folder_url });
 
-      getExtra = () => ({ title: title.value, location: location.value, category: categoryInput.getValue(), description: descriptionField.editor.getHtml(), tags: tagInput.getValue() });
+      const eventsFs = addFeaturedAndScheduleFields(form, prefillSrc);
+
+      getExtra = () => ({ title: title.value, location: location.value, category: categoryInput.getValue(), description: descriptionField.editor.getHtml(), tags: tagInput.getValue(), featured: eventsFs.getFeatured(), publish_at: eventsFs.getPublishAt() });
       form._getEventThumb = () => (eventThumbFile ? { file: eventThumbFile, name: eventThumbFileName } : null);
 
     } else if (type === 'videos') {
@@ -361,7 +409,9 @@ window.MOISDES.adminUpload = (function () {
       form.appendChild(fieldGroup('Extra images (optional)', galleryWrap));
       gallery = AF.createGalleryUploader(galleryWrap, { accept: 'image/*', existingFolder: existing?.folder_url });
 
-      getExtra = () => ({ title: title.value, location: location.value, category: categoryInput.getValue(), description: descriptionField.editor.getHtml(), video_url: videoUrl.value, tags: tagInput.getValue() });
+      const videosFs = addFeaturedAndScheduleFields(form, prefillSrc);
+
+      getExtra = () => ({ title: title.value, location: location.value, category: categoryInput.getValue(), description: descriptionField.editor.getHtml(), video_url: videoUrl.value, tags: tagInput.getValue(), featured: videosFs.getFeatured(), publish_at: videosFs.getPublishAt() });
       form._getVideoFile = () => (videoFile ? { file: videoFile, name: videoFileName } : null);
 
     } else if (type === 'pdfs' && isEdit) {
@@ -475,7 +525,9 @@ window.MOISDES.adminUpload = (function () {
       });
       thumbNameInput.addEventListener('input', () => { manualThumbFileName = thumbNameInput.value; });
 
-      getExtra = () => ({ title: title.value, category: categoryInput.getValue(), language: languagePicker.getValue(), parsha: parshaPicker.getValue(), year: year.getValue() });
+      const pdfsFs = addFeaturedAndScheduleFields(form, prefillSrc);
+
+      getExtra = () => ({ title: title.value, category: categoryInput.getValue(), language: languagePicker.getValue(), parsha: parshaPicker.getValue(), year: year.getValue(), featured: pdfsFs.getFeatured(), publish_at: pdfsFs.getPublishAt() });
 
       form._getPdfFile = () => ({ file: pdfFile, name: pdfFileName });
       form._getThumb = () => manualThumbFile
@@ -527,6 +579,8 @@ window.MOISDES.adminUpload = (function () {
 
         const cardYear = yearInput('');
         card.appendChild(fieldGroup('Year', cardYear.row));
+
+        const cardFs = addFeaturedAndScheduleFields(card, {});
 
         let autoThumbBlob = null, manualThumbFile = null, manualThumbFileName = '';
         const thumbPreviewWrap = el('div');
@@ -595,6 +649,8 @@ window.MOISDES.adminUpload = (function () {
             language: cardLanguagePicker.getValue(),
             parsha: cardParshaPicker.getValue(),
             year: cardYear.getValue(),
+            featured: cardFs.getFeatured(),
+            publish_at: cardFs.getPublishAt(),
           }),
           getPdfFile: () => ({ file, name: file.name }),
           getThumb: () => manualThumbFile

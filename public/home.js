@@ -36,6 +36,14 @@
     return data.title || '';
   }
 
+  // The featured spotlight's excerpt line — only posts/events/videos
+  // have body-ish text at all; posters/pdfs just show title+date.
+  function textFor(type, data) {
+    if (type === 'post') return data.body;
+    if (type === 'event' || type === 'video') return data.description;
+    return '';
+  }
+
   async function imageFor(type, data) {
     if (type === 'event') return data.thumb_url ? api.r2Url(data.thumb_url) : api.firstImageUrl(data.folder_url);
     if (type === 'video') {
@@ -67,10 +75,12 @@
   }
 
   // The home mosaic's big slot, as a 3D crossfade carousel over every
-  // post marked "featured" in the admin — main image + title + a short
-  // excerpt per slide, auto-advancing every 6 seconds. Falls back to a
-  // single static tile (renderMosaicTile) when nothing's featured.
-  async function renderFeaturedSpotlight(posts) {
+  // item marked "featured" in the admin — across every section, not
+  // just posts — with its main image + title + a short excerpt (where
+  // that type has body-ish text) per slide, auto-advancing every 6
+  // seconds. Falls back to a single static tile (renderMosaicTile) when
+  // nothing's featured. `items` is [{type, data}, ...].
+  async function renderFeaturedSpotlight(items) {
     const box = document.createElement('div');
     box.className = 'mosaic-item mosaic-big mosaic-featured';
     const stage = document.createElement('div');
@@ -78,17 +88,19 @@
     box.appendChild(stage);
 
     const slides = [];
-    for (const data of posts) {
-      const img = await imageFor('post', data);
+    for (const { type, data } of items) {
+      const meta = TYPE_META[type];
+      const img = await imageFor(type, data);
+      const text = excerpt(textFor(type, data), 110);
       const slide = document.createElement('a');
       slide.className = 'featured-slide';
-      slide.href = TYPE_META.post.href(data);
+      slide.href = meta.href(data);
       slide.innerHTML = `
         ${img ? `<div class="mosaic-media" style="background-image:url('${util.eh(img)}')"></div>` : ''}
         <div class="mosaic-overlay">
-          <span class="mosaic-badge">${TYPE_META.post.label}</span>
-          <div class="mosaic-title">${util.eh(titleFor('post', data))}</div>
-          <div class="mosaic-excerpt">${util.eh(excerpt(data.body, 110))}</div>
+          <span class="mosaic-badge">${meta.label}</span>
+          <div class="mosaic-title">${util.eh(titleFor(type, data))}</div>
+          ${text ? `<div class="mosaic-excerpt">${util.eh(text)}</div>` : ''}
           <div class="mosaic-date">${hebrew.isoToHebrewString(data.date)}</div>
         </div>
       `;
@@ -176,11 +188,14 @@
       }
 
       if (!alreadyRendered) {
-        // The big slot is a rotating spotlight of every post marked
-        // "featured" in the admin, if there are any — otherwise it falls
-        // back to the single newest post, same as before.
-        const featuredPosts = byType.post.filter((p) => Number(p.featured)).slice(0, 8);
-        const hasSpotlight = featuredPosts.length > 0;
+        // The big slot is a rotating spotlight of every item marked
+        // "featured" in the admin, across every section — not just
+        // posts — if there are any; otherwise it falls back to the
+        // single newest post, same as before.
+        const allFeatured = allFlat.filter((it) => Number(it.data.featured));
+        allFeatured.sort((a, b) => util.dateDesc(a.data.date, b.data.date));
+        const featuredItems = allFeatured.slice(0, 8);
+        const hasSpotlight = featuredItems.length > 0;
 
         // Curate the rest: one of every other section guaranteed, rest
         // filled by overall recency, up to 10 tiles total counting the
@@ -198,7 +213,7 @@
           chosen.push({ type, data });
         }
         if (hasSpotlight) {
-          featuredPosts.forEach((p) => chosenSet.add(itemKey('post', p)));
+          featuredItems.forEach((it) => chosenSet.add(itemKey(it.type, it.data)));
         } else if (byType.post[0]) {
           add('post', byType.post[0]);
         }
@@ -217,7 +232,7 @@
         // rhythm — otherwise every tile is a uniform 1x1, which looks
         // flat next to the one big tile.
         const SIZE_BY_INDEX = { 0: 'mosaic-big', 2: 'mosaic-tall', 3: 'mosaic-wide', 7: 'mosaic-tall', 8: 'mosaic-wide' };
-        if (hasSpotlight) mosaicEl.appendChild(await renderFeaturedSpotlight(featuredPosts));
+        if (hasSpotlight) mosaicEl.appendChild(await renderFeaturedSpotlight(featuredItems));
         const indexOffset = hasSpotlight ? 1 : 0;
         for (let i = 0; i < chosen.length; i++) {
           const { type, data } = chosen[i];

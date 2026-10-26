@@ -238,21 +238,25 @@ const CONTENT_SCHEMAS = {
   )`,
 };
 
+// Every type except simchas (ticker-only, no page of its own) can be
+// featured (home mosaic spotlight) and/or scheduled (publish_at).
+const SCHEDULABLE_TYPES = ['posts', 'posters', 'events', 'videos', 'pdfs'];
+
 const CONTENT_MIGRATIONS = {
-  posts: ['tags TEXT', 'category TEXT', 'folder_url TEXT', 'deleted_at TEXT', 'featured INTEGER DEFAULT 0'],
-  posters: ['folder_url TEXT', 'deleted_at TEXT'],
-  events: ['tags TEXT', 'folder_url TEXT', 'thumb_url TEXT', 'deleted_at TEXT'],
-  videos: ['tags TEXT', 'video_url TEXT', 'folder_url TEXT', 'video_file_url TEXT', 'deleted_at TEXT'],
-  pdfs: ['language TEXT', 'parsha TEXT', 'year TEXT', 'thumb_url TEXT', 'deleted_at TEXT'],
+  posts: ['tags TEXT', 'category TEXT', 'folder_url TEXT', 'deleted_at TEXT', 'featured INTEGER DEFAULT 0', 'publish_at TEXT'],
+  posters: ['folder_url TEXT', 'deleted_at TEXT', 'featured INTEGER DEFAULT 0', 'publish_at TEXT'],
+  events: ['tags TEXT', 'folder_url TEXT', 'thumb_url TEXT', 'deleted_at TEXT', 'featured INTEGER DEFAULT 0', 'publish_at TEXT'],
+  videos: ['tags TEXT', 'video_url TEXT', 'folder_url TEXT', 'video_file_url TEXT', 'deleted_at TEXT', 'featured INTEGER DEFAULT 0', 'publish_at TEXT'],
+  pdfs: ['language TEXT', 'parsha TEXT', 'year TEXT', 'thumb_url TEXT', 'deleted_at TEXT', 'featured INTEGER DEFAULT 0', 'publish_at TEXT'],
   simchas: ['deleted_at TEXT'],
 };
 
 const CONTENT_FIELDS = {
-  posts: ['date', 'title', 'body', 'folder_url', 'tags', 'category', 'featured'],
-  posters: ['date', 'parsha', 'folder_url'],
-  events: ['date', 'title', 'location', 'category', 'description', 'tags', 'folder_url', 'thumb_url'],
-  videos: ['date', 'title', 'location', 'category', 'description', 'tags', 'video_url', 'folder_url', 'video_file_url'],
-  pdfs: ['date', 'title', 'category', 'language', 'parsha', 'year', 'pdf_url', 'thumb_url'],
+  posts: ['date', 'title', 'body', 'folder_url', 'tags', 'category', 'featured', 'publish_at'],
+  posters: ['date', 'parsha', 'folder_url', 'featured', 'publish_at'],
+  events: ['date', 'title', 'location', 'category', 'description', 'tags', 'folder_url', 'thumb_url', 'featured', 'publish_at'],
+  videos: ['date', 'title', 'location', 'category', 'description', 'tags', 'video_url', 'folder_url', 'video_file_url', 'featured', 'publish_at'],
+  pdfs: ['date', 'title', 'category', 'language', 'parsha', 'year', 'pdf_url', 'thumb_url', 'featured', 'publish_at'],
   simchas: ['text', 'date_added'],
 };
 
@@ -803,10 +807,13 @@ function youtubeIdServer(url) {
 
 async function getHomeFeedPayload(env) {
   const tables = ['posts', 'posters', 'events', 'videos', 'pdfs'];
+  // The home feed is purely a public-page feed (no admin consumer) — a
+  // scheduled item with a future publish_at is always excluded here,
+  // unconditionally.
   const resultsArr = await Promise.all(tables.map((t) => {
     const orderCol = ORDER_COLUMN[t] || 'date';
     return env.DB.prepare(
-      `SELECT * FROM ${t} WHERE deleted_at IS NULL ORDER BY ${orderCol} DESC, id DESC LIMIT 60`
+      `SELECT * FROM ${t} WHERE deleted_at IS NULL AND (publish_at IS NULL OR publish_at <= datetime('now')) ORDER BY ${orderCol} DESC, id DESC LIMIT 60`
     ).all();
   }));
   const payload = {};
@@ -1072,8 +1079,15 @@ async function handleListContent({ match, url, env, user, ctx }) {
   }
 
   const orderCol = ORDER_COLUMN[table] || 'date';
+  // A scheduled (publish_at in the future) item stays invisible to an
+  // anonymous request — exactly like "deleted", just time-gated instead
+  // of permanent — but an authenticated admin request still sees it (so
+  // Browse & Edit can show/manage what's scheduled before it goes live).
+  const scheduleClause = SCHEDULABLE_TYPES.includes(table) && !user
+    ? "AND (publish_at IS NULL OR publish_at <= datetime('now'))"
+    : '';
   const { results } = await env.DB.prepare(
-    `SELECT * FROM ${table} WHERE deleted_at IS NULL ORDER BY ${orderCol} DESC, id DESC`
+    `SELECT * FROM ${table} WHERE deleted_at IS NULL ${scheduleClause} ORDER BY ${orderCol} DESC, id DESC`
   ).all();
 
   // Who uploaded each item is admin-only info — attach it only for an
