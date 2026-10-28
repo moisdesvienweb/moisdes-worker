@@ -1610,12 +1610,10 @@ async function getGoogleAccessToken(env) {
   return data.access_token;
 }
 
-async function handleCreateGcalEvent({ request, env, user }) {
-  await requireSection(env, user, 'calendar', 'write');
-  const calendarId = env.GCAL_CALENDAR_ID;
-  if (!calendarId) throw new HttpError('GCAL_CALENDAR_ID is not configured on the Worker', 500);
-
-  const body = await request.json().catch(() => ({}));
+// Shared by create and update — turns the admin form's fields into a
+// Google Calendar API event resource (same validation, same all-day-vs-
+// timed logic either way).
+function buildGcalEventResource(body, timeZone) {
   const title = String(body.title || '').trim();
   const startDate = String(body.startDate || '').trim();
   const endDate = String(body.endDate || startDate).trim();
@@ -1627,9 +1625,7 @@ async function handleCreateGcalEvent({ request, env, user }) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw new HttpError('A valid start date is required', 400);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate)) throw new HttpError('A valid end date is required', 400);
 
-  const timeZone = env.GCAL_TIMEZONE || 'America/New_York';
   const allDay = !startTime && !endTime;
-
   let start, end;
   if (allDay) {
     start = { date: startDate };
@@ -1643,12 +1639,23 @@ async function handleCreateGcalEvent({ request, env, user }) {
     start = { dateTime: `${startDate}T${startTime || '00:00'}:00`, timeZone };
     end = { dateTime: `${endDate}T${endTime || startTime || '23:59'}:00`, timeZone };
   }
+  return { summary: title, description, location, start, end };
+}
+
+async function handleCreateGcalEvent({ request, env, user }) {
+  await requireSection(env, user, 'calendar', 'write');
+  const calendarId = env.GCAL_CALENDAR_ID;
+  if (!calendarId) throw new HttpError('GCAL_CALENDAR_ID is not configured on the Worker', 500);
+
+  const body = await request.json().catch(() => ({}));
+  const timeZone = env.GCAL_TIMEZONE || 'America/New_York';
+  const resource = buildGcalEventResource(body, timeZone);
 
   const accessToken = await getGoogleAccessToken(env);
   const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ summary: title, description, location, start, end }),
+    body: JSON.stringify(resource),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new HttpError(`Google Calendar rejected the event: ${data.error?.message || 'unknown error'}`, 502);
@@ -1659,6 +1666,92 @@ async function handleCreateGcalEvent({ request, env, user }) {
   await cache.delete(new Request(`https://cache.internal/gcal-events?id=${encodeURIComponent(calendarId)}`));
 
   return json({ ok: true, event: { id: data.id, htmlLink: data.htmlLink } });
+}
+
+// Lists upcoming events straight from the Calendar API v3 (not the public
+// iCal feed handleGcalEvents reads) — admin-only, since it needs the
+// service account's write-scoped token anyway, and the API's real event
+// `id` (the iCal feed's UID isn't reliably the same thing) is what
+// handleUpdateGcalEvent/handleDeleteGcalEvent need to target a specific
+// event.
+async function handleListGcalEventsForManage({ env, user }) {
+  await requireSection(env, user, 'calendar', 'read');
+  const calendarId = env.GCAL_CALENDAR_ID;
+  if (!calendarId) throw new HttpError('GCAL_CALENDAR_ID is not configured on the Worker', 500);
+
+  const accessToken = await getGoogleAccessToken(env);
+  const params = new URLSearchParams({
+    timeMin: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
+    singleEvents: 'true',
+    orderBy: 'startTime',
+    maxResults: '100',
+  });
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new HttpError(`Could not list Google Calendar events: ${data.error?.message || 'unknown error'}`, 502);
+
+  const events = (data.items || []).map((e) => ({
+    id: e.id,
+    title: e.summary || '',
+    description: e.description || '',
+    location: e.location || '',
+    start: e.start,
+    end: e.end,
+    htmlLink: e.htmlLink,
+  }));
+  return json({ events });
+}
+
+async function handleUpdateGcalEvent({ match, request, env, user }) {
+  await requireSection(env, user, 'calendar', 'write');
+  const calendarId = env.GCAL_CALENDAR_ID;
+  if (!calendarId) throw new HttpError('GCAL_CALENDAR_ID is not configured on the Worker', 500);
+  const eventId = match[1];
+
+  const body = await request.json().catch(() => ({}));
+  const timeZone = env.GCAL_TIMEZONE || 'America/New_York';
+  const resource = buildGcalEventResource(body, timeZone);
+
+  const accessToken = await getGoogleAccessToken(env);
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(resource),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new HttpError(`Google Calendar rejected the update: ${data.error?.message || 'unknown error'}`, 502);
+
+  const cache = caches.default;
+  await cache.delete(new Request(`https://cache.internal/gcal-events?id=${encodeURIComponent(calendarId)}`));
+
+  return json({ ok: true, event: { id: data.id, htmlLink: data.htmlLink } });
+}
+
+async function handleDeleteGcalEvent({ match, env, user }) {
+  await requireSection(env, user, 'calendar', 'write');
+  const calendarId = env.GCAL_CALENDAR_ID;
+  if (!calendarId) throw new HttpError('GCAL_CALENDAR_ID is not configured on the Worker', 500);
+  const eventId = match[1];
+
+  const accessToken = await getGoogleAccessToken(env);
+  const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  // Google returns 410 Gone if it was already deleted — treat that as
+  // success too rather than surfacing an error for something already
+  // accomplished.
+  if (!res.ok && res.status !== 410) {
+    const data = await res.json().catch(() => ({}));
+    throw new HttpError(`Google Calendar rejected the delete: ${data.error?.message || 'unknown error'}`, 502);
+  }
+
+  const cache = caches.default;
+  await cache.delete(new Request(`https://cache.internal/gcal-events?id=${encodeURIComponent(calendarId)}`));
+
+  return json({ ok: true });
 }
 
 // ── HANDLERS: R2 ────────────────────────────────────────────────────
@@ -2239,6 +2332,9 @@ const routes = [
   ['POST', /^\/api\/daf-entries\/bulk$/, handleDafBulkUpsert],
   ['GET', /^\/api\/gcal-events$/, handleGcalEvents],
   ['POST', /^\/api\/gcal-events$/, handleCreateGcalEvent],
+  ['GET', /^\/api\/gcal-events\/manage$/, handleListGcalEventsForManage],
+  ['PUT', /^\/api\/gcal-events\/([^/]+)$/, handleUpdateGcalEvent],
+  ['DELETE', /^\/api\/gcal-events\/([^/]+)$/, handleDeleteGcalEvent],
   ['GET', /^\/api\/gcal-subscribe-url$/, handleGcalSubscribeUrl],
   ['GET', /^\/api\/settings$/, handleGetSettings],
   ['PUT', /^\/api\/settings$/, handleUpdateSettings],

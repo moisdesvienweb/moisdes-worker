@@ -116,6 +116,35 @@ window.MOISDES.adminUpload = (function () {
     return { wrap, getValue: () => input.value.trim() };
   }
 
+  // Google's API returns start/end as {date} (all-day) or {dateTime,
+  // timeZone} (timed, dateTime already carrying that timeZone's offset,
+  // e.g. "2026-11-05T19:00:00-05:00") — this is the reverse of
+  // buildGcalEventResource on the Worker, turning that back into the
+  // plain startDate/endDate/startTime/endTime the form's fields use.
+  function parseGcalEventForForm(ev) {
+    const start = ev.start || {};
+    const end = ev.end || {};
+    if (start.date) {
+      // end.date is EXCLUSIVE in Google's API — subtract a day back off
+      // so a multi-day event shows the actual last day that was picked.
+      let endDate = end.date || start.date;
+      if (endDate && endDate !== start.date) {
+        const d = new Date(`${endDate}T00:00:00Z`);
+        d.setUTCDate(d.getUTCDate() - 1);
+        endDate = d.toISOString().slice(0, 10);
+      }
+      return { startDate: start.date, endDate: endDate || start.date, startTime: '', endTime: '' };
+    }
+    const startDt = start.dateTime || '';
+    const endDt = end.dateTime || '';
+    return {
+      startDate: startDt.slice(0, 10),
+      endDate: endDt.slice(0, 10) || startDt.slice(0, 10),
+      startTime: startDt.slice(11, 16),
+      endTime: endDt.slice(11, 16),
+    };
+  }
+
   // Parsha field uses AF.createParshaPicker (pill-select + add-new) now —
   // see admin-fields.js.
 
@@ -203,6 +232,67 @@ window.MOISDES.adminUpload = (function () {
       getFeatured: () => (featuredCheckbox.checked ? 1 : 0),
       getPublishAt: () => localInputValueToPublishAt(scheduleInput.value),
     };
+  }
+
+  // Lists events straight from the admin's Google Calendar (via the
+  // Worker's service-account token, not the public iCal feed — see
+  // handleListGcalEventsForManage) so an existing one can be picked for
+  // editing or deleted. Appended below the create/edit form, every time
+  // the Calendar tab is (re)built.
+  function buildCalendarEventsList(container) {
+    const wrap = el('div', 'calendar-events-list');
+    wrap.appendChild(el('h2', '', 'Upcoming events'));
+    const loadingMsg = el('div', 'state-msg', 'Loading…');
+    wrap.appendChild(loadingMsg);
+    const tableWrap = el('div', 'table-wrap');
+    const table = el('table');
+    tableWrap.appendChild(table);
+    wrap.appendChild(tableWrap);
+    container.appendChild(wrap);
+
+    api.get('/api/gcal-events/manage').then(({ events }) => {
+      loadingMsg.remove();
+      if (!events.length) {
+        wrap.appendChild(el('p', 'state-msg', 'No upcoming events.'));
+        return;
+      }
+      const thead = el('thead', '', '<tr><th>Date</th><th>Title</th><th>Location</th><th>Actions</th></tr>');
+      const tbody = el('tbody');
+      events.forEach((ev) => {
+        const tr = el('tr');
+        const dateLabel = ev.start?.date || (ev.start?.dateTime || '').slice(0, 16).replace('T', ' ');
+        [dateLabel, ev.title, ev.location].forEach((text) => {
+          const td = el('td', 'wrap');
+          td.textContent = text || '';
+          tr.appendChild(td);
+        });
+
+        const actionsTd = el('td');
+        const editBtn = el('button', 'btn btn-sm', 'Edit');
+        editBtn.addEventListener('click', () => buildForm('calendar', container, { existing: ev }));
+        const delBtn = el('button', 'btn btn-sm btn-danger', 'Delete');
+        delBtn.style.marginInlineStart = '.4rem';
+        delBtn.addEventListener('click', async () => {
+          if (!confirm(`Delete "${ev.title || 'this event'}" from the calendar? This cannot be undone.`)) return;
+          delBtn.disabled = true;
+          try {
+            await api.del(`/api/gcal-events/${encodeURIComponent(ev.id)}`);
+            tr.remove();
+          } catch (e) {
+            alert(e.message || 'Could not delete.');
+            delBtn.disabled = false;
+          }
+        });
+        actionsTd.appendChild(editBtn);
+        actionsTd.appendChild(delBtn);
+        tr.appendChild(actionsTd);
+        tbody.appendChild(tr);
+      });
+      table.appendChild(thead);
+      table.appendChild(tbody);
+    }).catch((e) => {
+      loadingMsg.textContent = e.message || 'Could not load events.';
+    });
   }
 
   // ── FORM BUILDER — shared by "Upload" (create) and "Browse & Edit" (edit) ──
@@ -677,35 +767,46 @@ window.MOISDES.adminUpload = (function () {
       getExtra = () => ({ text: text.value });
 
     } else if (type === 'calendar') {
-      // Writes a real event straight to the admin's Google Calendar (via
-      // the Worker's service-account credentials) — this isn't a site
-      // content type and has no local record, so there's nothing to
-      // browse/edit here afterward; manage it in Google Calendar itself.
-      const title = textInput('Event title', '');
+      // Writes straight to the admin's Google Calendar via the Worker's
+      // service-account credentials — not a local D1 row, so editing
+      // (existing here is a Google event, from the "Upcoming events"
+      // list built below) targets the real Google event id instead of
+      // our own database.
+      const parsed = existing ? parseGcalEventForForm(existing) : null;
+
+      const title = textInput('Event title', existing?.title || '');
       form.appendChild(fieldGroup('Title', title));
 
       const startDateWrap = el('div');
       form.appendChild(fieldGroup('Start date', startDateWrap));
-      const startDatePicker = AF.createDatePicker(startDateWrap, '');
+      const startDatePicker = AF.createDatePicker(startDateWrap, parsed?.startDate || '');
 
       const endDateWrap = el('div');
       form.appendChild(fieldGroup('End date (same as start for a one-day event)', endDateWrap));
-      const endDatePicker = AF.createDatePicker(endDateWrap, '');
+      const endDatePicker = AF.createDatePicker(endDateWrap, parsed?.endDate || '');
 
       const timeRow = el('div', 'field-row');
       const startTime = el('input');
       startTime.type = 'time';
+      startTime.value = parsed?.startTime || '';
       const endTime = el('input');
       endTime.type = 'time';
+      endTime.value = parsed?.endTime || '';
       timeRow.appendChild(startTime);
       timeRow.appendChild(endTime);
       form.appendChild(fieldGroup('Start / end time (leave both blank for an all-day event)', timeRow));
 
-      const locationField = locationAutocompleteInput('');
+      const locationField = locationAutocompleteInput(existing?.location || '');
       form.appendChild(fieldGroup('Location', locationField.wrap));
 
-      const descField = richTextField('Description', '');
+      const descField = richTextField('Description', existing?.description || '');
       form.appendChild(descField.group);
+
+      if (isEdit) {
+        const cancelBtn = el('button', 'btn btn-sm', 'Cancel editing');
+        cancelBtn.addEventListener('click', () => buildForm('calendar', container));
+        form.appendChild(cancelBtn);
+      }
 
       getExtra = () => ({
         title: title.value.trim(),
@@ -723,6 +824,8 @@ window.MOISDES.adminUpload = (function () {
     form.appendChild(submitBtn);
     form.appendChild(status);
     container.appendChild(form);
+
+    if (type === 'calendar') buildCalendarEventsList(container);
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -772,17 +875,23 @@ window.MOISDES.adminUpload = (function () {
         return;
       }
 
-      // Calendar — a one-shot write straight to Google Calendar, nothing
-      // saved locally, so it skips the whole date/payload/R2 flow below.
+      // Calendar — a write straight to Google Calendar, nothing saved
+      // locally, so it skips the whole date/payload/R2 flow below.
       if (type === 'calendar') {
         try {
           const extra = getExtra();
           if (!extra.title) throw new Error('Please enter a title.');
           if (!extra.startDate) throw new Error('Please choose a start date.');
-          setStatus(status, 'Creating calendar event…');
-          await api.post('/api/gcal-events', extra);
-          setStatus(status, 'Event created in Google Calendar.', true);
-          buildForm(type, container);
+          if (isEdit) {
+            setStatus(status, 'Saving changes…');
+            await api.put(`/api/gcal-events/${encodeURIComponent(existing.id)}`, extra);
+            setStatus(status, 'Event updated.', true);
+          } else {
+            setStatus(status, 'Creating calendar event…');
+            await api.post('/api/gcal-events', extra);
+            setStatus(status, 'Event created in Google Calendar.', true);
+          }
+          buildForm('calendar', container);
         } catch (err) {
           setStatus(status, err.message || 'Something went wrong.', false);
           submitBtn.disabled = false;
