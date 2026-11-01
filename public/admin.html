@@ -22,17 +22,20 @@
 <div id="admin-root">
   <header class="app-header">
     <div class="app-header-brand"><img src="/logo.avif" alt="Moisdes Vien"><span>Moisdes Vien</span></div>
-    <nav class="sidebar-nav">
-      <button class="sidebar-link active" data-panel="upload">Upload</button>
-      <button class="sidebar-link" data-panel="browse">Browse &amp; Edit</button>
-      <button class="sidebar-link" data-panel="forms">Forms<span class="nav-badge" id="forms-unread-badge" style="display:none"></span></button>
-      <button class="sidebar-link" data-panel="daf">Daf Calendar</button>
-      <button class="sidebar-link" data-panel="settings">Settings</button>
-      <button class="sidebar-link" data-panel="analytics">Analytics</button>
-      <button class="sidebar-link" data-panel="emails">Email Center</button>
-      <button class="sidebar-link" data-panel="users">Users</button>
-    </nav>
-    <button class="sidebar-link sidebar-logout" id="logout-btn">Logout</button>
+    <button class="admin-burger" id="admin-burger-btn" aria-label="Menu" type="button">&#9776;</button>
+    <div class="app-header-menu" id="app-header-menu">
+      <nav class="sidebar-nav">
+        <button class="sidebar-link active" data-panel="upload">Upload</button>
+        <button class="sidebar-link" data-panel="browse">Browse &amp; Edit</button>
+        <button class="sidebar-link" data-panel="forms">Forms<span class="nav-badge" id="forms-unread-badge" style="display:none"></span></button>
+        <button class="sidebar-link" data-panel="daf">Daf Calendar</button>
+        <button class="sidebar-link" data-panel="settings">Settings</button>
+        <button class="sidebar-link" data-panel="analytics">Analytics</button>
+        <button class="sidebar-link" data-panel="emails">Email Center</button>
+        <button class="sidebar-link" data-panel="users">Users</button>
+      </nav>
+      <button class="sidebar-link sidebar-logout" id="logout-btn">Logout</button>
+    </div>
   </header>
 
   <main class="admin-main">

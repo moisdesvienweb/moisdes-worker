@@ -41,11 +41,17 @@ button, input, select, textarea { font-family: inherit; }
   background: var(--header-bg);
   padding: 0 1.5rem;
   flex-wrap: wrap;
+  position: relative; /* anchors .app-header-menu's dropdown on mobile */
 }
 .app-header-brand { display: flex; align-items: center; gap: .6rem; padding: .85rem 0; flex-shrink: 0; }
 .app-header-brand img { height: 30px; }
 .app-header-brand span { color: var(--header-link-active-ink); font-weight: 700; font-size: .95rem; }
+.app-header-menu { display: flex; align-items: center; gap: 1.5rem; flex: 1; min-width: 0; }
 .sidebar-nav { display: flex; align-items: center; gap: .15rem; flex: 1; flex-wrap: wrap; }
+.admin-burger {
+  display: none; background: none; border: none; color: #fff; font-size: 1.4rem;
+  cursor: pointer; padding: .5rem; margin-inline-start: auto;
+}
 .sidebar-link {
   text-align: left;
   background: none; border: none; color: var(--header-link);
@@ -82,6 +88,15 @@ h2 { font-size: 1.05rem; margin: 0 0 .75rem; }
 
 /* ── FORM ELEMENTS ──────────────────────────────────────────────── */
 
+/* Base row layout for a plain (non field-group-wrapped) form — e.g. the
+   "add user" form. Several forms set flex-direction:column (and other
+   flex-only properties) inline for a stacked layout; those only take
+   effect once display:flex is actually established, which is here. */
+.inline-form { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-bottom: 1rem; }
+.inline-form input, .inline-form select {
+  padding: .5rem .7rem; border-radius: 4px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--ink); font-size: .9rem;
+}
 .field-group { margin-bottom: 1.1rem; }
 .checkbox-row { display: flex; align-items: center; gap: .5rem; margin-bottom: .5rem; }
 .checkbox-row input { width: auto; }
@@ -300,3 +315,69 @@ tr:hover td { background: var(--panel-2); }
 }
 .chart-card h2 { margin: 0 0 1rem; font-size: .95rem; }
 .chart-card canvas { max-height: 240px; }
+
+/* ── MOBILE ─────────────────────────────────────────────────────── */
+
+@media (max-width: 860px) {
+  /* Header collapses to a burger + dropdown menu instead of 8 nav
+     buttons wrapping across several cramped rows. */
+  .admin-burger { display: block; }
+  .app-header-menu {
+    display: none;
+    position: absolute; top: 100%; left: 0; right: 0;
+    flex-direction: column; align-items: stretch; gap: 0;
+    background: var(--header-bg-2);
+    padding: .5rem; box-shadow: 0 10px 24px rgba(0, 0, 0, .35);
+    z-index: 500; max-height: calc(100vh - 56px); overflow-y: auto;
+  }
+  .app-header-menu.open { display: flex; }
+  .sidebar-nav { flex-direction: column; align-items: stretch; width: 100%; gap: 0; }
+  .sidebar-link { width: 100%; text-align: left; padding: .8rem 1rem; }
+  .sidebar-logout { margin-inline-start: 0; width: 100%; }
+
+  .admin-main { padding: 1.25rem 1rem 3rem; }
+  h1 { font-size: 1.2rem; }
+
+  /* Tabs scroll horizontally instead of wrapping into a ragged
+     multi-row block. */
+  .subtabs { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
+  .subtab { flex-shrink: 0; }
+
+  /* Two-up field rows (date+dropdown, category+year, etc.) stack —
+     side-by-side gets too cramped to use comfortably by touch. */
+  .field-row { flex-direction: column; gap: .6rem; }
+  .footer-btn-row { flex-direction: column; }
+  .footer-btn-row input:first-child { flex: 1; }
+
+  /* Forms panel's list+detail side-by-side layout stacks; the list no
+     longer needs a fixed width once it's not sitting next to anything. */
+  .forms-layout { flex-direction: column; gap: 1.25rem; }
+  .forms-list-col { width: 100%; }
+
+  /* Near-fullscreen modal instead of a small centered box with a lot of
+     dead space clipped by the on-screen keyboard. */
+  .modal-overlay { padding: 0; align-items: stretch; }
+  .modal { max-width: 100%; max-height: 100%; height: 100%; border-radius: 0; }
+
+  /* Touch targets: buttons get a little more breathing room, and an
+     action cell's several small buttons wrap onto their own lines
+     instead of overlapping/getting clipped. */
+  .btn { padding: .6rem 1rem; }
+  .btn-sm { padding: .45rem .7rem; }
+  td .btn, td .btn-sm { margin-bottom: .3rem; }
+  table td:last-child, table th:last-child { white-space: normal; }
+
+  .browse-toolbar { flex-direction: column; align-items: stretch; gap: .6rem; }
+  .browse-toolbar .filter-input { max-width: none; }
+
+  .inline-form { flex-direction: column; align-items: stretch; }
+  .inline-form select { width: 100%; }
+
+  .perm-editor { max-width: 100%; }
+}
+
+@media (max-width: 480px) {
+  table { font-size: .8rem; }
+  th, td { padding: .5rem .5rem; }
+  .app-header-brand span { display: none; } /* logo alone is enough at this width */
+}

@@ -25,6 +25,14 @@
   const role = api.getUser()?.role;
   const isFullAccess = role === 'admin' || role === 'superadmin';
 
+  // ── Mobile nav (burger toggles the header menu dropdown open/closed;
+  // picking a section or logging out closes it again) ─────────────────
+  const burgerBtn = document.getElementById('admin-burger-btn');
+  const headerMenu = document.getElementById('app-header-menu');
+  if (burgerBtn && headerMenu) {
+    burgerBtn.addEventListener('click', () => headerMenu.classList.toggle('open'));
+  }
+
   // ── Sidebar panel switching ──────────────────────────────────────
   document.querySelectorAll('.sidebar-link[data-panel]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -32,6 +40,7 @@
       btn.classList.add('active');
       document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
       document.getElementById('panel-' + btn.dataset.panel).classList.add('active');
+      if (headerMenu) headerMenu.classList.remove('open');
     });
   });
 
