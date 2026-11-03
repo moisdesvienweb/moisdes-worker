@@ -24,6 +24,12 @@ schema on every request, so there is nothing to run by hand there.
    Cloudflare Workers via the dashboard's "Connect to Git" for
    auto-deploy on push to `main`).
 
+## Domain not resolving / site showing the wrong thing?
+
+See [`DNS-SETUP.md`](./DNS-SETUP.md) — the domain is attached in two
+places (Cloudflare's Worker custom domains, and Squarespace's DNS), and
+both need to be right.
+
 ## First login
 
 A superadmin account is seeded automatically the first time the D1
